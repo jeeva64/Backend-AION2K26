@@ -1,4 +1,4 @@
-# AION 2K26 Winter — Backend
+# AION 2K26 : Backend
 
 FastAPI + Motor (async MongoDB) backend for the AION 2K26 Winter event.
 
