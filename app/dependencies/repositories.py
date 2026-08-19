@@ -1,30 +1,30 @@
 from typing import Annotated
 
 from fastapi import Depends
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.db import get_db
-from app.repositories import (
-    AdminRepository,
-    CollegeRepository,
-    EventRegistrationRepository,
-    UserRepository,
+from app.repositories_sqla import (
+    AdminRepositorySqla,
+    CollegeRepositorySqla,
+    EventRegistrationRepositorySqla,
+    UserRepositorySqla,
 )
 
 
-def get_user_repo(db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]) -> UserRepository:
-    return UserRepository(db)
+def get_user_repo(session: Annotated[AsyncSession, Depends(get_db)]) -> UserRepositorySqla:
+    return UserRepositorySqla(session)
 
 
-def get_admin_repo(db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]) -> AdminRepository:
-    return AdminRepository(db)
+def get_admin_repo(session: Annotated[AsyncSession, Depends(get_db)]) -> AdminRepositorySqla:
+    return AdminRepositorySqla(session)
 
 
-def get_college_repo(db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]) -> CollegeRepository:
-    return CollegeRepository(db)
+def get_college_repo(session: Annotated[AsyncSession, Depends(get_db)]) -> CollegeRepositorySqla:
+    return CollegeRepositorySqla(session)
 
 
 def get_event_regs_repo(
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
-) -> EventRegistrationRepository:
-    return EventRegistrationRepository(db)
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> EventRegistrationRepositorySqla:
+    return EventRegistrationRepositorySqla(session)

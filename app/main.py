@@ -10,7 +10,6 @@ from app.api import admin as admin_api
 from app.api import auth as auth_api
 from app.config.logging import setup_logging
 from app.config.settings import settings
-from app.db.mongo import close_db, connect_to_db
 from app.exceptions.api_error import APIError
 from app.exceptions import handlers
 from app.middleware.cors import add_cors_middleware
@@ -26,15 +25,32 @@ logger = logging.getLogger("app")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging(settings.LOG_LEVEL)
-    await connect_to_db()
-    logger.info("MongoDB connected successfully")
+
+    # Primary persistence layer: PostgreSQL via SQLAlchemy.
+    from app.db.sqlalchemy import close_db as close_sqla, connect_to_db as connect_sqla
+
+    await connect_sqla()
+    logger.info("PostgreSQL connected successfully")
+
+    # Optional legacy MongoDB lifespan (off by default).
+    if settings.MONGO_RETAIN and settings.MONGO_URI:
+        from app.db.mongo import close_db as close_mongo, connect_to_db as connect_mongo
+
+        await connect_mongo()
+        logger.info("MongoDB (legacy, RETAIN=true) connected")
+
     yield
-    await close_db()
+
+    await close_sqla()
+    if settings.MONGO_RETAIN and settings.MONGO_URI:
+        from app.db.mongo import close_db as close_mongo
+
+        await close_mongo()
 
 
 app = FastAPI(
-    title="AION 2K26 Winter Backend",
-    version="1.1.0",
+    title="AION 2K26 Backend",
+    version="2.0.0",
     lifespan=lifespan,
     default_response_class=MongoJSONResponse,
 )

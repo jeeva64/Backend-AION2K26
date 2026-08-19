@@ -2,11 +2,12 @@ import secrets
 import time
 
 from fastapi import APIRouter, Depends, Request
-from pymongo.errors import DuplicateKeyError
+from sqlalchemy.exc import IntegrityError
 
 from app.auth.dependencies import get_current_super_admin, get_current_user
 from app.auth.security import create_access_token, hash_password, verify_password
 from app.config.settings import settings
+from app.dependencies.db import AsyncSessionDep
 from app.dependencies.repositories import (
     get_college_repo,
     get_event_regs_repo,
@@ -14,8 +15,11 @@ from app.dependencies.repositories import (
 )
 from app.exceptions.api_error import APIError
 from app.middleware.rate_limit import limiter
-from app.models.user import UserDoc
-from app.repositories import CollegeRepository, EventRegistrationRepository, UserRepository
+from app.repositories_sqla import (
+    CollegeRepositorySqla,
+    EventRegistrationRepositorySqla,
+    UserRepositorySqla,
+)
 from app.schemas.auth import (
     AddCollegeResponse,
     GetCandidatesRequest,
@@ -30,14 +34,14 @@ from app.schemas.auth import (
     StatsResponse,
 )
 from app.schemas.common import success
-from app.services.registration import register_team
+from app.services.registration_sqla import register_team
 from app.utils.serializers import sanitize
 from app.utils.validators import clean_mobile_number
 
 router = APIRouter()
 
 
-async def _generate_leader_id(users: UserRepository) -> str:
+async def _generate_leader_id(users: UserRepositorySqla) -> str:
     while True:
         candidate = f"LD{int(time.time() * 1000)}{secrets.randbelow(1000)}"
         if not await users.find_by_userid(candidate):
@@ -47,8 +51,9 @@ async def _generate_leader_id(users: UserRepository) -> str:
 @router.post("/regleader", status_code=201, response_model=LeaderRegisterResponse)
 async def register_leader(
     payload: LeaderRegisterRequest,
-    users: UserRepository = Depends(get_user_repo),
-    colleges: CollegeRepository = Depends(get_college_repo),
+    session: AsyncSessionDep,
+    users: UserRepositorySqla = Depends(get_user_repo),
+    colleges: CollegeRepositorySqla = Depends(get_college_repo),
 ):
     normalized_email = payload.email.strip().lower()
     if await users.find_by_email(normalized_email):
@@ -65,19 +70,21 @@ async def register_leader(
 
     leader_id = await _generate_leader_id(users)
 
-    user_doc = UserDoc(
-        userid=leader_id,
-        name=payload.name.strip(),
-        email=normalized_email,
-        mobilenumber=clean_mobile,
-        department=payload.department.strip(),
-        college=payload.college.strip(),
-        shift=payload.shift.strip(),
-        password=hash_password(payload.password),
-    )
     try:
-        await users.insert(user_doc.model_dump())
-    except DuplicateKeyError:
+        await users.insert(
+            {
+                "userid": leader_id,
+                "name": payload.name.strip(),
+                "email": normalized_email,
+                "mobilenumber": clean_mobile,
+                "department": payload.department.strip(),
+                "college": payload.college.strip(),
+                "shift": payload.shift.strip(),
+                "password": hash_password(payload.password),
+            }
+        )
+        await session.flush()
+    except IntegrityError:
         raise APIError(400, "Registration failed. Email or mobile number is already registered.")
 
     await colleges.mark_registered(payload.college.strip())
@@ -90,7 +97,7 @@ async def register_leader(
 async def login_leader(
     request: Request,
     payload: LeaderLoginRequest,
-    users: UserRepository = Depends(get_user_repo),
+    users: UserRepositorySqla = Depends(get_user_repo),
 ):
     normalized_email = payload.email.strip().lower()
     user = await users.find_by_email(normalized_email)
@@ -106,9 +113,10 @@ async def login_leader(
 @router.post("/registerteam", response_model=RegisterTeamResponse)
 async def register_team_route(
     payload: RegisterTeamRequest,
+    session: AsyncSessionDep,
     current_user: dict = Depends(get_current_user),
-    users: UserRepository = Depends(get_user_repo),
-    event_regs: EventRegistrationRepository = Depends(get_event_regs_repo),
+    users: UserRepositorySqla = Depends(get_user_repo),
+    event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
 ):
     if payload.leaderId != current_user["userid"]:
         raise APIError(403, "Access denied. Leader ID mismatch.")
@@ -123,6 +131,7 @@ async def register_team_route(
         raise APIError(400, "Leader profile incomplete. Missing college or department.")
 
     result = await register_team(
+        session,
         event_regs,
         leader_id=payload.leaderId,
         event=payload.event,
@@ -141,7 +150,7 @@ async def register_team_route(
 async def get_candidates(
     payload: GetCandidatesRequest,
     current_user: dict = Depends(get_current_user),
-    event_regs: EventRegistrationRepository = Depends(get_event_regs_repo),
+    event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
 ):
     if not payload.user_id:
         raise APIError(400, "User ID required")
@@ -169,7 +178,7 @@ async def get_candidates(
 async def get_stats(
     leader_id: str,
     current_user: dict = Depends(get_current_user),
-    event_regs: EventRegistrationRepository = Depends(get_event_regs_repo),
+    event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
 ):
     if leader_id != current_user["userid"]:
         raise APIError(403, "Access denied. Leader ID mismatch.")
@@ -198,7 +207,7 @@ async def get_stats(
 async def add_college(
     colleges: list[dict],
     current_admin: dict = Depends(get_current_super_admin),
-    colleges_repo: CollegeRepository = Depends(get_college_repo),
+    colleges_repo: CollegeRepositorySqla = Depends(get_college_repo),
 ):
     if not colleges:
         raise APIError(400, "Send array of colleges")
@@ -207,19 +216,14 @@ async def add_college(
         if not college.get("collegeId") or not college.get("name"):
             raise APIError(400, "Each college must have collegeId and name")
 
-    try:
-        result = await colleges_repo.insert_many(colleges)
-        inserted = len(result.inserted_ids)
-    except Exception as exc:
-        details = getattr(exc, "details", None)
-        inserted = (details or {}).get("nInserted", 0)
-        if inserted == 0:
-            raise APIError(400, "No colleges were added. Duplicate collegeId values detected.")
+    inserted = await colleges_repo.insert_many(colleges)
+    if inserted == 0:
+        raise APIError(400, "No colleges were added. Duplicate collegeId values detected.")
 
     return success("Colleges added successfully", count=inserted)
 
 
 @router.get("/getcollege", response_model=GetCollegeResponse)
-async def get_college(colleges_repo: CollegeRepository = Depends(get_college_repo)):
+async def get_college(colleges_repo: CollegeRepositorySqla = Depends(get_college_repo)):
     colleges = await colleges_repo.find_all()
     return success("Colleges fetched successfully", data=sanitize(colleges))
