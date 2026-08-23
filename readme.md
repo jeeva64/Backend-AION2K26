@@ -1,65 +1,78 @@
 # AION 2K26 : Backend
 
-FastAPI + Motor (async MongoDB) backend for the AION 2K26 Winter event.
+FastAPI + SQLAlchemy 2.0 (async PostgreSQL) backend for the AION 2K26 Winter event.
 
-This is a full migration of the original Express/Mongoose backend. It connects to the **same MongoDB database** and keeps the **same collection names and field names**, so existing data works without any migration.
+This is a full migration of the original Express/Mongoose backend. The runtime now
+persists to **PostgreSQL** via SQLAlchemy 2.0 + asyncpg, with the schema owned by
+**Alembic**. The legacy MongoDB code is kept dormant for the migration window — see
+`MIGRATION.md` for the full migration guide and rollback strategy.
 
 ## Tech Stack
 
 - Python 3.11
 - FastAPI 0.115
-- Motor 3.7 (async MongoDB driver)
-- PyMongo 4.11
+- SQLAlchemy 2.0 (async engine) + asyncpg — **primary persistence**
+- Alembic 1.14 (schema migrations; seeds `event_slots`/`events` reference data)
 - PyJWT 2.10 (JWT auth)
 - bcrypt 4.3 (password hashing)
 - Pydantic 2.11 + pydantic-settings 2.8
 - slowapi 0.1.9 (rate limiting)
+- Motor 3.7 / PyMongo 4.11 *(legacy, migration window only — used by `scripts/migrate_mongo_to_postgres.py`)*
 
 ## Folder Structure
 
 ```
 Backend-AION2K26-Winter/
 ├── requirements.txt        # runtime deps
-├── requirements-dev.txt    # + pytest, httpx, pytest-asyncio
+├── requirements-dev.txt    # + pytest, httpx, pytest-asyncio, psycopg2-binary
 ├── .env.example            # copy to .env and fill real values
 ├── .env                    # local config (gitignored)
 ├── run.py                  # uvicorn entry point
+├── alembic.ini
+├── alembic/
+│   ├── env.py              # async Alembic env (DATABASE_URL from settings)
+│   └── versions/
+│       ├── 0001_initial_schema.py          # all tables/CHECKs/indexes/trigger + seeds
+│       ├── 0002_seed_super_admin.py        # no-op placeholder (seeder is explicit)
+│       └── 0003_bid_mayhem_bidirectional.py# trg_bid_mayhem: BOTH rejected in either column
 ├── scripts/
-│   ├── create_super_admin.py  # seed the first Super Admin (Mongo)
-│   └── ensure_indexes.py      # create the unique indexes
+│   ├── create_super_admin.py           # seed the first Super Admin (Postgres)
+│   ├── seed_reference_data.py          # re-seed events/slots (idempotent)
+│   ├── migrate_mongo_to_postgres.py    # one-time data migration (--force/--dry-run)
+│   └── create_super_admin_mongo.py     # legacy bootstrap helper (migration window)
 └── app/
     ├── main.py             # app factory, middleware stack, exception wiring
     ├── config/
     │   ├── settings.py     # environment/settings (pydantic-settings)
     │   └── logging.py      # structured JSON logging
     ├── db/
-    │   └── mongo.py        # Motor client lifecycle + collection names
+    │   ├── sqlalchemy.py   # async engine + session factory (primary)
+    │   └── mongo.py        # Motor client lifecycle (dormant; MONGO_RETAIN=true)
     ├── auth/
     │   ├── security.py     # bcrypt + JWT helpers
     │   └── dependencies.py # Bearer-token deps (user/admin/super-admin)
     ├── exceptions/
     │   ├── api_error.py    # APIError (status_code + message)
-    │   └── handlers.py     # centralized exception handlers
+    │   └── handlers.py     # centralized exception handlers (400-not-422 contract)
     ├── middleware/
     │   ├── cors.py             # CORS
     │   ├── security_headers.py # HSTS/nosniff/frame/COOP headers
     │   ├── request_logging.py  # JSON access log + X-Request-ID
     │   └── rate_limit.py       # slowapi limiter + middleware
-    ├── repositories/       # data-access layer per collection
-    │   ├── base.py
-    │   ├── user_repository.py
-    │   ├── admin_repository.py
-    │   ├── college_repository.py
-    │   └── event_registration_repository.py
-    ├── dependencies/       # DI wiring (get_db, repository factories)
-    ├── models/             # Pydantic document models (mirror MongoDB)
-    ├── schemas/            # request DTOs + typed response models
+    ├── dependencies/       # DI wiring (AsyncSessionDep, repository factories)
+    ├── models_sqla/        # SQLAlchemy ORM models (snake_case columns)
+    ├── models/             # legacy Pydantic doc models (reference only)
+    ├── schemas/            # request DTOs + typed response models (camelCase)
     ├── api/
     │   ├── auth.py         # leader-facing routes
     │   └── admin.py        # admin routes (prefix /admin)
+    ├── repositories_sqla/  # async repos returning camelCase dicts (primary)
+    ├── repositories/       # legacy Motor repos (dormant, migration window)
     ├── services/
-    │   ├── registration.py # team registration business logic + rollback
-    │   └── stats.py        # aggregation pipelines for reports
+    │   ├── registration_sqla.py # team registration business logic (1 transaction)
+    │   ├── stats_sqla.py        # SQL GROUP BY report queries
+    │   ├── registration.py      # legacy Mongo implementation (kept for audit)
+    │   └── stats.py             # legacy Mongo aggregations (kept for audit)
     └── utils/
         ├── constants.py    # enums, event→slot map, limits
         ├── validators.py   # ported from simple-validators.js
@@ -76,22 +89,52 @@ python -m venv .venv
 
 Copy `.env.example` to `.env` and set real values:
 
-| Variable             | Required | Description                                              |
-|----------------------|----------|----------------------------------------------------------|
-| `MONGO_URI`          | Yes      | MongoDB connection string, must include database name    |
-| `MONGO_DB`           | No       | Optional database override if not part of `MONGO_URI`    |
-| `JWT_SECRET`         | Yes      | Secret for signing JWTs (min 16 characters)              |
-| `JWT_ALGORITHM`      | No       | Default `HS256`                                          |
-| `JWT_EXPIRE_HOURS`   | No       | Token lifetime in hours, default `8`                     |
-| `CORS_ORIGINS`       | No       | Comma-separated origins, or `*` (default)                |
-| `PORT`               | No       | Default `5000`                                           |
-| `ENVIRONMENT`        | No       | `development` / `production`                             |
-| `LOG_LEVEL`          | No       | `INFO` default; structured JSON logs                     |
-| `RATE_LIMIT_ENABLED` | No       | Enable slowapi rate limiting (`false` default)           |
-| `RATE_LIMIT_DEFAULT` | No       | Per-IP default limit, e.g. `20/minute`                   |
-| `RATE_LIMIT_LOGIN`   | No       | Tighter limit for login endpoints, e.g. `10/minute`      |
+| Variable             | Required | Description                                                              |
+|----------------------|----------|--------------------------------------------------------------------------|
+| `DATABASE_URL`       | Yes      | PostgreSQL DSN, async form: `postgresql+asyncpg://user:pass@host:5432/db`|
+| `SQLA_ECHO`          | No       | Echo SQL in development (`false` default)                                |
+| `REGISTRATION_FEE_PER_STUDENT_PAISE` | No | Registration fee in integer paise (`20000` = Rs.200/student)    |
+| `PROOF_MAX_MB`       | No       | Payment screenshot size cap in MB (default `5`)                          |
+| `PROOF_STORAGE_BACKEND` | No    | `local` (dev/tests) or `b2` (Backblaze B2, production)                   |
+| `PROOF_LOCAL_DIR`    | No       | Local proof dir when backend is `local` (default `payment_proofs_local`) |
+| `B2_BUCKET` / `B2_REGION` / `B2_ACCESS_KEY_ID` / `B2_SECRET_ACCESS_KEY` | When `b2` | Private B2 bucket credentials (S3-compatible) |
+| `UPI_VPA`            | No       | UPI ID shown to leaders; empty disables the QR/intent URI                |
+| `UPI_PAYEE_NAME`     | No       | Payee name embedded in the UPI intent URI                                |
+| `MONGO_URI`          | No       | Legacy source DB for the one-time migration script only                  |
+| `MONGO_DB`           | No       | Optional database override if not part of `MONGO_URI`                    |
+| `MONGO_RETAIN`       | No       | `true` keeps the Mongo lifespan active (default `false`)                 |
+| `JWT_SECRET`         | Yes      | Secret for signing JWTs (min 16 characters)                              |
+| `JWT_ALGORITHM`      | No       | Default `HS256`                                                          |
+| `JWT_EXPIRE_HOURS`   | No       | Token lifetime in hours, default `8`                                     |
+| `CORS_ORIGINS`       | No       | Comma-separated origins, or `*` (default)                                |
+| `PORT`               | No       | Default `5000`                                                           |
+| `ENVIRONMENT`        | No       | `development` / `production`                                             |
+| `LOG_LEVEL`          | No       | `INFO` default; structured JSON logs                                     |
+| `RATE_LIMIT_ENABLED` | No       | Enable slowapi rate limiting (`false` default)                           |
+| `RATE_LIMIT_DEFAULT` | No       | Per-IP default limit, e.g. `20/minute`                                   |
+| `RATE_LIMIT_LOGIN`   | No       | Tighter limit for login endpoints, e.g. `10/minute`                      |
 
-The app fails to start if `MONGO_URI` or a valid `JWT_SECRET` is missing.
+The app fails to start if `DATABASE_URL` is missing/not a PostgreSQL DSN or a
+valid `JWT_SECRET` is missing. On startup it pings Postgres (`SELECT 1`) and
+aborts when unreachable.
+
+### First-run setup
+
+```bash
+# 1. create role + database (run once as a PostgreSQL superuser)
+psql -U postgres -c "CREATE ROLE aion WITH LOGIN PASSWORD 'aion' CREATEDB;"
+psql -U postgres -c "CREATE DATABASE aion2026 OWNER aion;"
+
+# 2. apply the schema (Alembic owns every table/index/CHECK/trigger)
+.venv\Scripts\python -m alembic upgrade head
+
+# 3. seed the bootstrap Super Admin (chicken-and-egg: /admin/adminreg needs
+#    a Super Admin token, so the first one is created out-of-band)
+.venv\Scripts\python scripts\create_super_admin.py SA1 Root "YourPassword"
+
+# 4. (optional) re-seed events/slots reference data after a schema bump
+.venv\Scripts\python scripts\seed_reference_data.py
+```
 
 > Rate limiting uses an in-memory store — valid per single uvicorn process. For
 > multi-worker deployments configure a shared store (Redis) via slowapi's
@@ -192,8 +235,8 @@ Token payloads:
   the access log for correlating errors.
 - **Structured logging**: JSON lines to stdout (timestamp, level, logger,
   message) plus JSON access logs (method, path, status, duration, client IP, UA).
-- **Env hardening**: config from `.env` only; fail-fast on missing `MONGO_URI` /
-  short `JWT_SECRET`.
+- **Env hardening**: config from `.env` only; fail-fast on missing/invalid
+  `DATABASE_URL` / short `JWT_SECRET`.
 
 ## Testing
 
@@ -202,10 +245,14 @@ Token payloads:
 .venv\Scripts\python -m pytest tests -v
 ```
 
-Requires MongoDB (default `mongodb://localhost:27017`). The suite drops and
-reseeds its own `aion_pytest_test` database. Covers all 15 routes, the auth
-matrix, Bid Mayhem / slot rules, rollback, rate limiting, and unit tests for
-validators and JWT/bcrypt.
+Requires **PostgreSQL** running at `localhost:5432` with role `aion:aion`
+(CREATEDB). The suite drops and rebuilds its own `aion_pytest_test` database by
+running `alembic upgrade head` per session (exercising the real migration), then
+seeds one Super Admin (`SA1` / `Admin@12345`, `role: 1`). Covers all 18 routes,
+the auth matrix, Bid Mayhem / slot rules (service layer + DB trigger), DB
+constraints, registration races, rollback, rate limiting, and unit tests for
+validators and JWT/bcrypt. `tests/migration_test.py` self-skips when the legacy
+MongoDB is unreachable, so the rest of the suite runs Mongo-less.
 
 ---
 
@@ -426,19 +473,17 @@ Request body:
 }
 ```
 
-- `role`: `1` (Super Admin) or `2` (Moderator).
+- `role`: **only `2` (Moderator)** may be created via this endpoint. Super
+  Admins (`role: 1`) are created exclusively via the seeder script.
 - `adminId` must be unique.
 
 Success `201`: `{ "success": true, "message": "Admin registered successfully" }`
 
-> **Bootstrap note:** the very first Super Admin cannot be created through the API (it requires a Super Admin token). Insert it directly into MongoDB:
-> ```js
-> db.admins.insertOne({ adminId: "SA1", name: "Root", role: 1, password: "<bcrypt hash>" })
-> ```
-> Or use the helper:
+> **Bootstrap note:** the very first Super Admin cannot be created through the API (it requires a Super Admin token, and `/admin/adminreg` only creates Moderators). Seed it directly against PostgreSQL:
 > ```bash
 > .venv\Scripts\python scripts\create_super_admin.py SA1 Root "YourPassword"
 > ```
+> The legacy Mongo variant is `scripts/create_super_admin_mongo.py` (migration window only).
 
 ### `POST /admin/adminlogin`
 Admin login. Public.
@@ -460,7 +505,64 @@ Success `200`:
 }
 ```
 
-Invalid credentials → `401`.
+`message` is `"Super Admin logged in"` for role 1 and `"Organizer logged in"`
+for role 2. Invalid credentials → `401`.
+
+### `POST /admin/changepassword`
+Change the logged-in admin's own password. **Requires admin Bearer token** (any role).
+
+Request body:
+
+```json
+{
+  "currentPassword": "Admin@12345",
+  "newPassword": "NewPass@123",
+  "confirmPassword": "NewPass@123"
+}
+```
+
+Validation (`400` on failure):
+- All three fields required.
+- `newPassword`: same strength rules as leader passwords (8–128 chars, ≥1 uppercase, ≥1 lowercase, ≥1 digit, ≥1 special char, no spaces).
+- `currentPassword` must match the stored password.
+- `newPassword` must differ from `currentPassword`.
+- `newPassword` must equal `confirmPassword`.
+
+Success `200`: `{ "success": true, "message": "Password updated successfully" }`
+
+Existing tokens stay valid until they expire (JWTs carry no password version).
+
+### `PUT /admin/college/{collegeId}`
+Update a college's fields. **Requires Super Admin Bearer token** (`adminRole: 1`).
+
+Request body (any subset; at least one field):
+
+```json
+{ "name": "Anna University", "state": "TN", "district": "Chennai" }
+```
+
+- Empty/omitted body → `400 No fields to update`.
+- Unknown `collegeId` → `404 College not found`.
+
+Success `200`: `{ "success": true, "message": "College updated successfully" }`
+
+### `GET /admin/leader-college-depts`
+Distinct college → departments pairs derived from registered leaders. **Requires admin Bearer token** (any role).
+
+Success `200`:
+
+```json
+{
+  "success": true,
+  "message": "College departments fetched successfully",
+  "data": [
+    { "college": "Anna University", "departments": ["cs", "it"] },
+    { "college": "SRM Institute", "departments": ["ai"] }
+  ]
+}
+```
+
+Sorted by college name.
 
 ### `POST /admin/viewteam`
 View registrations for a college + department. **Requires admin Bearer token.**
@@ -562,7 +664,8 @@ Success `200`:
 No registrations → `404`.
 
 ### `GET /admin/dashboardstats`
-Overall event statistics. **Requires admin Bearer token.** Computed with MongoDB aggregation pipelines.
+Overall event statistics. **Requires admin Bearer token.** Computed with set-based
+SQL aggregates (GROUP BY / COUNT over both event columns).
 
 Success `200`:
 
@@ -618,3 +721,67 @@ Liveness check. Public.
 | Crazy Sell     | 2    |
 
 An event not in this map is rejected with `400` on `/registerteam`.
+
+---
+
+## Registration Payment Workflow
+
+Registration is **not confirmed until the payment passes manual verification**.
+
+```
+/registerteam ──► rows created with status = PAYMENT_PENDING
+                  payment row created (one per leader, UNIQUE)
+                  amount = ₹200 × unique students (backend-calculated)
+        ↓
+Leader pays via UPI (QR / intent URI from GET /payments/mine)
+        ↓
+POST /payments/proof  (UTR + amount + screenshot)
+  payment → VERIFICATION_PENDING, registrations → VERIFICATION_PENDING
+  team edits are LOCKED while under review
+        ↓
+Super Admin reviews at GET /admin/payments
+  ├── POST .../verify  → payment SUCCESS + registrations CONFIRMED (atomic)
+  └── POST .../reject {reason} → payment REJECTED + registrations back to
+      PAYMENT_PENDING (leader may resubmit; Super Admin may reopen)
+```
+
+Key rules:
+
+- **Fee** = `REGISTRATION_FEE_PER_STUDENT_PAISE` × unique student count
+  (`COUNT(DISTINCT upper(register_number))`). The backend is the only source of
+  truth for the count and the amount — frontend values are cosmetic.
+- **Money is integer paise** everywhere (`expectedAmountPaises`,
+  `submittedAmountPaises`). Never floats.
+- **UTR** is required, trimmed, normalized to uppercase, validated
+  (`8–22` alphanumeric) and **globally UNIQUE** across payments (partial unique
+  index). Duplicate UTRs are rejected with `409`.
+- **Amount mismatch never auto-fails**: submitted vs expected amounts are both
+  stored and surfaced to the admin (Expected / Submitted / Difference); the
+  Super Admin decides. A screenshot alone can never mark a payment successful.
+- **Proofs** (JPG/PNG/WebP, ≤ `PROOF_MAX_MB`, content-sniffed via Pillow) are
+  stored in a **private** B2 bucket (`PROOF_STORAGE_BACKEND=b2`) or on local
+  disk for dev/tests. Admin access is authenticated-only — signed URL or an
+  authorized streaming endpoint; screenshots are never public URLs.
+- Every action (created / proof submitted / verified / rejected / reopened) is
+  recorded in the append-only `payment_audit` table.
+- Abandoned registrations stay in `PAYMENT_PENDING` forever — nothing is
+  auto-deleted.
+
+### Payment endpoints
+
+Leader (Bearer token):
+
+- `GET /payments/mine` — status, payable amount, UPI intent URI.
+- `POST /payments/proof` — multipart: `utr`, `amountPaises`, `screenshot`.
+
+Super Admin only (`adminRole: 1`):
+
+- `GET /admin/payments?status=PENDING|VERIFICATION_PENDING|SUCCESS|REJECTED`
+- `GET /admin/payments/{payment_id}` — detail + audit trail.
+- `GET /admin/payments/{payment_id}/proof` — proof access descriptor (URL).
+- `GET /admin/payments/{payment_id}/proof/content` — authorized image stream.
+- `POST /admin/payments/{payment_id}/verify`
+- `POST /admin/payments/{payment_id}/reject` — body `{ "reason": "..." }`.
+- `POST /admin/payments/{payment_id}/reopen`
+
+---

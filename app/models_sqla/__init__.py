@@ -4,6 +4,7 @@ from app.models_sqla.base import Base, TimestampMixin
 from app.models_sqla.college import College
 from app.models_sqla.event import Event, EventSlot
 from app.models_sqla.event_registration import EventRegistration
+from app.models_sqla.payment import Payment, PaymentAudit
 from app.models_sqla.user import User
 
 __all__ = [
@@ -13,6 +14,8 @@ __all__ = [
     "Event",
     "EventRegistration",
     "EventSlot",
+    "Payment",
+    "PaymentAudit",
     "TimestampMixin",
     "User",
 ]

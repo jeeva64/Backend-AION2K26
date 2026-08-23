@@ -1,5 +1,11 @@
 # Database — MongoDB Schema Reference
 
+> **LEGACY — migration window only.** The runtime no longer uses MongoDB; the
+> active persistence layer is PostgreSQL (schema owned by Alembic). This page
+> documents the legacy Mongo collections that
+> `scripts/migrate_mongo_to_postgres.py` reads as its source. For the current
+> schema see `MIGRATION.md` §1 and `alembic/versions/`.
+
 The backend uses MongoDB via the async Motor driver. It connects to the **same database as the original Express/Mongoose backend**, so all collection and field names are unchanged.
 
 ## Connection

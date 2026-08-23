@@ -147,6 +147,7 @@ async def register_team(
                 food_preference=participant.foodPreference,
                 event1_id=srv_event.id,
                 slot1_id=srv_slot.id,
+                status="PAYMENT_PENDING",
             )
             session.add(new_obj)
             await session.flush()

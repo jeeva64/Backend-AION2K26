@@ -8,6 +8,7 @@ from app.repositories_sqla import (
     AdminRepositorySqla,
     CollegeRepositorySqla,
     EventRegistrationRepositorySqla,
+    PaymentRepositorySqla,
     UserRepositorySqla,
 )
 
@@ -28,3 +29,9 @@ def get_event_regs_repo(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> EventRegistrationRepositorySqla:
     return EventRegistrationRepositorySqla(session)
+
+
+def get_payment_repo(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> PaymentRepositorySqla:
+    return PaymentRepositorySqla(session)

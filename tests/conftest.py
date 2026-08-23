@@ -16,6 +16,11 @@ os.environ.setdefault("JWT_SECRET", "pytest-secret-key-1234567890")
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 # Mongo should NOT be active during the test run.
 os.environ["MONGO_RETAIN"] = "false"
+# Payment proofs go to a scratch local dir (no cloud credentials in tests).
+os.environ.setdefault("PROOF_STORAGE_BACKEND", "local")
+os.environ.setdefault(
+    "PROOF_LOCAL_DIR", os.path.join(os.path.expanduser("~"), ".aion_proof_tests")
+)
 
 import asyncio
 import subprocess
@@ -45,8 +50,9 @@ async def _reset_schema() -> None:
             # Drop tables ignoring FK order.
             await conn.execute(
                 text(
-                    "DROP TABLE IF EXISTS event_registrations, users, admins, "
-                    "colleges, events, event_slots, alembic_version CASCADE"
+                    "DROP TABLE IF EXISTS payment_audit, payments, "
+                    "event_registrations, users, admins, colleges, events, "
+                    "event_slots, alembic_version CASCADE"
                 )
             )
     finally:
@@ -105,6 +111,7 @@ def _clear_registrations(client):
     """
     yield
     import asyncio as _aio
+    import shutil as _shutil
 
     async def _wipe():
         from sqlalchemy import text
@@ -113,8 +120,17 @@ def _clear_registrations(client):
         eng = _cae(settings.DATABASE_URL)
         try:
             async with eng.begin() as conn:
-                await conn.execute(text("TRUNCATE event_registrations RESTART IDENTITY CASCADE"))
+                await conn.execute(
+                    text(
+                        "TRUNCATE payment_audit, payments, event_registrations "
+                        "RESTART IDENTITY CASCADE"
+                    )
+                )
         finally:
             await eng.dispose()
 
     _aio.run(_wipe())
+
+    proof_dir = settings.PROOF_LOCAL_DIR
+    if os.path.isdir(proof_dir):
+        _shutil.rmtree(proof_dir, ignore_errors=True)

@@ -168,6 +168,11 @@ class LeaderLoginResponse(APIResponse):
 class RegisterTeamResponse(APIResponse):
     created: int
     updated: int
+    uniqueStudents: int | None = None
+    amountDuePaises: int | None = None
+    currency: str | None = None
+    upiUri: str | None = None
+    paymentStatus: str | None = None
 
 
 class GetCandidatesResponse(APIResponse):

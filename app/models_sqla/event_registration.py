@@ -53,8 +53,13 @@ class EventRegistration(Base, TimestampMixin):
         ForeignKey("event_slots.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('PAYMENT_PENDING', 'VERIFICATION_PENDING', 'CONFIRMED', 'REJECTED')",
+            name="ck_event_registrations_status",
+        ),
         CheckConstraint(
             "department IN ('cs', 'it', 'ai', 'ds', 'ca')",
             name="ck_event_registrations_department",
@@ -92,6 +97,7 @@ class EventRegistration(Base, TimestampMixin):
             "college_name_text",
             "department",
         ),
+        Index("ix_event_registrations_status", "status"),
         Index("ix_event_registrations_event1", "event1_id"),
         Index("ix_event_registrations_event2", "event2_id"),
     )

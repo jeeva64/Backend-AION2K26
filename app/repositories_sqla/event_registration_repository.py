@@ -25,6 +25,7 @@ class EventRegistrationRepositorySqla:
             "department": obj.department,
             "degree": obj.degree,
             "foodPreference": obj.food_preference,
+            "status": obj.status,
             "event1_id": obj.event1_id,
             "slot1_id": obj.slot1_id,
             "event2_id": obj.event2_id,
@@ -45,9 +46,12 @@ class EventRegistrationRepositorySqla:
         result = await self._session.execute(stmt)
         return {row.id: row.slot_label for row in result.all()}
 
-    async def _hydrate(self, obj: EventRegistration) -> dict:
-        events = await self._resolve_events_map()
-        slots = await self._resolve_slots_map()
+    def _to_hydrated_dict(
+        self,
+        obj: EventRegistration,
+        events: dict[int, str],
+        slots: dict[int, str],
+    ) -> dict:
         d = self._to_dict(obj)
         d["event1"] = events.get(obj.event1_id)
         d["slot1"] = slots.get(obj.slot1_id)
@@ -55,11 +59,23 @@ class EventRegistrationRepositorySqla:
         d["slot2"] = slots.get(obj.slot2_id) if obj.slot2_id else None
         return d
 
+    async def _hydrate_many(self, objs: list[EventRegistration]) -> list[dict]:
+        """Resolve the events/slots maps ONCE per batch.
+
+        Never reintroduce a per-row map lookup — that was an N+1 (two extra
+        SELECTs for every document returned).
+        """
+        events = await self._resolve_events_map()
+        slots = await self._resolve_slots_map()
+        return [self._to_hydrated_dict(o, events, slots) for o in objs]
+
+    async def _hydrate(self, obj: EventRegistration) -> dict:
+        return (await self._hydrate_many([obj]))[0]
+
     async def find_by_leader(self, leader_id: str) -> list[dict]:
         stmt = select(EventRegistration).where(EventRegistration.leader_id == leader_id)
         result = await self._session.execute(stmt)
-        objs = result.scalars().all()
-        return [await self._hydrate(o) for o in objs]
+        return await self._hydrate_many(result.scalars().all())
 
     async def find_leader_event(self, leader_id: str, event_name: str) -> dict | None:
         stmt_events = select(Event.id).where(Event.name == event_name)
@@ -84,7 +100,7 @@ class EventRegistrationRepositorySqla:
             EventRegistration.register_number.in_(register_numbers),
         )
         result = await self._session.execute(stmt)
-        return [await self._hydrate(o) for o in result.scalars().all()]
+        return await self._hydrate_many(result.scalars().all())
 
     async def count_by_leader(self, leader_id: str) -> int:
         stmt = (
@@ -95,13 +111,51 @@ class EventRegistrationRepositorySqla:
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
 
+    async def count_distinct_students(self, leader_id: str) -> int:
+        """Unique students for a leader — the fee basis.
+
+        register_number is stored uppercased and UNIQUE per (leader_id,
+        register_number), so COUNT(*) equals DISTINCT count; the explicit
+        DISTINCT keeps this correct-by-construction.
+        """
+        stmt = (
+            select(
+                func.count(
+                    func.distinct(func.upper(EventRegistration.register_number))
+                )
+            )
+            .select_from(EventRegistration)
+            .where(EventRegistration.leader_id == leader_id)
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
+
+    async def update_status_by_leader(
+        self,
+        leader_id: str,
+        new_status: str,
+        from_statuses: tuple[str, ...],
+    ) -> int:
+        """Guarded bulk status transition for a leader's registrations."""
+        stmt = (
+            update(EventRegistration)
+            .where(
+                EventRegistration.leader_id == leader_id,
+                EventRegistration.status.in_(from_statuses),
+            )
+            .values(status=new_status)
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        return result.rowcount or 0
+
     async def find_team(self, college: str, department: str) -> list[dict]:
         stmt = select(EventRegistration).where(
             EventRegistration.college_name_text == college,
             EventRegistration.department == department,
         )
         result = await self._session.execute(stmt)
-        return [await self._hydrate(o) for o in result.scalars().all()]
+        return await self._hydrate_many(result.scalars().all())
 
     async def find_by_leader_and_event(
         self, leader_id: str, event_name: str
@@ -116,7 +170,7 @@ class EventRegistrationRepositorySqla:
             | (EventRegistration.event2_id == event_id),
         )
         result = await self._session.execute(stmt)
-        return [await self._hydrate(o) for o in result.scalars().all()]
+        return await self._hydrate_many(result.scalars().all())
 
     async def promote_event2_to_event1(
         self, doc_id: int, event2_id: int, slot2_id: int | None

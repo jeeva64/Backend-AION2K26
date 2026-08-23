@@ -33,6 +33,20 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: str = "20/minute"
     RATE_LIMIT_LOGIN: str = "10/minute"
 
+    # Registration payment (manual UPI + admin verification).
+    # Money is stored/transferred as integer paise — never floats.
+    REGISTRATION_FEE_PER_STUDENT_PAISE: int = 20000  # Rs.200 per unique student
+    PROOF_MAX_MB: int = 5
+    # "b2" (Backblaze B2, production) | "local" (dev/tests, disk fallback)
+    PROOF_STORAGE_BACKEND: str = "local"
+    PROOF_LOCAL_DIR: str = "payment_proofs_local"
+    B2_BUCKET: str | None = None
+    B2_REGION: str | None = None
+    B2_ACCESS_KEY_ID: str | None = None
+    B2_SECRET_ACCESS_KEY: str | None = None
+    UPI_VPA: str = ""
+    UPI_PAYEE_NAME: str = ""
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_cors_origins(cls, value):

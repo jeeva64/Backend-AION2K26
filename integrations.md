@@ -135,15 +135,27 @@ If a token is valid but for the wrong audience the API returns `403`. Example me
 | `POST /registerteam`           | Leader Bearer                     |
 | `POST /getcandidates`          | Leader Bearer                     |
 | `GET /stats/{leader_id}`       | Leader Bearer                     |
+| `GET /payments/mine`           | Leader Bearer                     |
+| `POST /payments/proof`         | Leader Bearer (multipart)         |
 | `POST /addcollege`             | Super Admin Bearer (`adminRole: 1`) |
 | `GET /getcollege`              | None (public)                     |
 | `POST /admin/adminreg`         | Super Admin Bearer (`adminRole: 1`) |
 | `POST /admin/adminlogin`       | None (public)                     |
+| `POST /admin/changepassword`   | Admin Bearer (any role)           |
 | `POST /admin/viewteam`         | Admin Bearer (any role)           |
 | `POST /admin/vieweventregs`    | Admin Bearer (any role)           |
 | `DELETE /admin/deleteteam/{leader_id}`        | Admin Bearer (any role) |
 | `DELETE /admin/deleteteambyevent/{leader_id}/{event}` | Admin Bearer (any role) |
 | `GET /admin/dashboardstats`    | Admin Bearer (any role)           |
+| `PUT /admin/college/{collegeId}` | Super Admin Bearer (`adminRole: 1`) |
+| `GET /admin/leader-college-depts` | Admin Bearer (any role)        |
+| `GET /admin/payments`          | Super Admin Bearer (`adminRole: 1`) |
+| `GET /admin/payments/{id}`     | Super Admin Bearer (`adminRole: 1`) |
+| `GET /admin/payments/{id}/proof` | Super Admin Bearer (`adminRole: 1`) |
+| `GET /admin/payments/{id}/proof/content` | Super Admin Bearer (`adminRole: 1`) |
+| `POST /admin/payments/{id}/verify` | Super Admin Bearer (`adminRole: 1`) |
+| `POST /admin/payments/{id}/reject` | Super Admin Bearer (`adminRole: 1`) |
+| `POST /admin/payments/{id}/reopen` | Super Admin Bearer (`adminRole: 1`) |
 
 ## Per-Endpoint Client Conditions
 
@@ -181,6 +193,67 @@ If a token is valid but for the wrong audience the API returns `403`. Example me
   - Student in Bid Mayhem cannot join other events; Bid Mayhem cannot combine with another event.
   - Same-slot clash (both events in slot `1`, or both in slot `2`).
 - `created` / `updated` in the response tell you how many were inserted vs. updated in place.
+- The response also carries payment info (additive): `uniqueStudents`,
+  `amountDuePaises`, `currency`, `upiUri`, `paymentStatus`. New rows are
+  created as `PAYMENT_PENDING`; when `paymentStatus` is `"PENDING"` show the
+  payment dialog next (amount + UPI QR + proof upload).
+- **Edit lock:** team registration returns `409` once payment proof is under
+  review (`VERIFICATION_PENDING`) or verified (`SUCCESS`). Surface that message
+  instead of letting students retry blindly.
+
+### `GET /payments/mine` (Leader)
+
+- No body. Returns `uniqueStudents`, `amountDuePaises`, `upiUri` (null when no
+  UPI VPA is configured server-side) and `data` = current payment or `null`.
+- Poll this on dashboard load / refresh to render the payment status card
+  (`data.paymentStatus`: `PENDING | VERIFICATION_PENDING | SUCCESS | REJECTED`,
+  plus `rejectionReason` when rejected).
+
+### `POST /payments/proof` (Leader)
+
+- `multipart/form-data` with fields: `utr` (string), `amountPaises` (integer
+  **paise**, e.g. `40000` = Rs.400) and `screenshot` (JPG/PNG/WebP file ≤ 5 MB).
+- Do NOT set `Content-Type` manually — send `FormData` and let the browser set
+  the boundary.
+- Success `200` → `{ success, message, paymentId, paymentStatus }` where
+  `paymentStatus` is `"VERIFICATION_PENDING"`. Never display "Payment
+  Successful" — confirmation comes only after admin verification.
+- Errors: `400` missing/invalid UTR, missing amount, unsupported file type,
+  oversized file; `404` no registration yet; `409` duplicate UTR across
+  leaders, payment already verified, or a different proof already under review
+  (resubmitting the SAME UTR while pending is idempotent-safe `200`).
+
+### `GET /admin/payments` (Super Admin)
+
+- Optional query `status=PENDING|VERIFICATION_PENDING|SUCCESS|REJECTED`; other
+  values → `400`.
+- `data[]` rows include leader name/college/department, expected vs submitted
+  amounts (paise), UTR, status, timestamps. Render Expected / Submitted /
+  Difference columns.
+
+### `GET /admin/payments/{id}` (Super Admin)
+
+- Returns `data` (payment detail incl. proof metadata) and `audit` (ordered
+  action history: action, old→new status, reason, admin, timestamp).
+
+### `GET /admin/payments/{id}/proof` and `/proof/content` (Super Admin)
+
+- `/proof` returns `{ url, expiresIn, mimeType, originalFilename }`. `url` is
+  either a short-lived signed object URL or an API-relative path to
+  `/proof/content` — fetch it with the Authorization header and render via a
+  blob/objectURL. Screenshots are never public URLs; `<img src>` directly
+  against the API will fail auth.
+
+### `POST /admin/payments/{id}/verify` · `/reject` · `/reopen` (Super Admin)
+
+- `verify`: no body → payment `SUCCESS`, all the leader's registrations become
+  `CONFIRMED`. Atomic.
+- `reject`: body `{ "reason": "..." }` (required, ≤500 chars) → payment
+  `REJECTED`, registrations revert to `PAYMENT_PENDING` so the leader can fix
+  and resubmit.
+- `reopen`: REJECTED → `VERIFICATION_PENDING` (undo a wrong rejection).
+- Invalid transitions return `409`; moderators (`adminRole: 2`) get `403` on
+  every payment endpoint.
 
 ### `POST /getcandidates`
 
@@ -198,6 +271,22 @@ If a token is valid but for the wrong audience the API returns `403`. Example me
 - Body is a **bare JSON array** of college objects — do not wrap it in an object.
 - Each item needs `collegeId` and `name` (`state`/`district` recommended). Items missing them → `400`.
 - Duplicate `collegeId` values are skipped; `count` tells you how many were actually inserted.
+
+### `POST /admin/adminreg`
+
+- Super Admin token required; only Moderators (`role: 2`) can be created here —
+  sending any other role → `400`. The first Super Admin comes from the seeder
+  script, not the API.
+
+### `POST /admin/changepassword` (Admin)
+
+- Send `currentPassword`, `newPassword`, `confirmPassword`.
+- `newPassword` must satisfy the same strength rules as leader passwords
+  (8–128 chars, ≥1 uppercase, ≥1 lowercase, ≥1 digit, ≥1 special char, no spaces).
+- `400` when the current password is wrong, the new password is identical to
+  the current one, or new/confirm don't match — show `message` verbatim.
+- On success (`200`) the existing token remains valid until it expires;
+  re-login is not required.
 
 ### `POST /admin/viewteam`
 
@@ -223,6 +312,19 @@ If a token is valid but for the wrong audience the API returns `403`. Example me
 
 - Response `stats` contains all report numbers; render once per dashboard load.
 
+### `PUT /admin/college/{collegeId}` (Super Admin only)
+
+- Body is a partial object — send only the fields to change
+  (`collegeId`, `name`, `state`, `district`); at least one is required, else `400`.
+- Unknown `collegeId` → `404`.
+- On success (`200`) re-fetch `/getcollege` (or apply the change locally) to refresh lists.
+
+### `GET /admin/leader-college-depts` (Admin)
+
+- No body. Returns `data` as an array of `{ "college": "...", "departments": ["cs", ...] }`
+  pairs derived from registered leaders, sorted by college name.
+- Useful for populating college/department filter dropdowns in admin views.
+
 ## Common Client Pitfalls
 
 1. **Forgetting the `Bearer ` prefix** — the API rejects with `401`.
@@ -231,6 +333,16 @@ If a token is valid but for the wrong audience the API returns `403`. Example me
 4. **Wrapping `addcollege` body in an object** — it must be an array, else `422`.
 5. **Expecting a bare array from `getcollege`** — it now returns `data: [...]`.
 6. **Storing tokens in plaintext** — fine for this scope; use `sessionStorage`/`localStorage` consistently and clear on logout.
+7. **Sending rupees instead of paise to `/payments/proof`** — `amountPaises` is
+   integer paise (Rs.200 → `20000`). The backend compares against its own
+   expected amount; mismatches are stored and flagged for admin review, never
+   auto-approved.
+8. **Setting `Content-Type` manually for `/payments/proof`** — send raw
+   `FormData`; a hand-set boundary breaks multipart parsing.
+9. **Showing "Payment Successful" after proof upload** — correct state is
+   "Verification Pending"; success exists only after Super Admin verification.
+10. **Rendering payment proof URLs in plain `<img src>`** — fetch with the
+    Authorization header and convert to an objectURL first.
 
 ## CORS
 

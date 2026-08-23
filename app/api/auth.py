@@ -1,7 +1,7 @@
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.dependencies import get_current_super_admin, get_current_user
@@ -11,6 +11,7 @@ from app.dependencies.db import AsyncSessionDep
 from app.dependencies.repositories import (
     get_college_repo,
     get_event_regs_repo,
+    get_payment_repo,
     get_user_repo,
 )
 from app.exceptions.api_error import APIError
@@ -18,6 +19,7 @@ from app.middleware.rate_limit import limiter
 from app.repositories_sqla import (
     CollegeRepositorySqla,
     EventRegistrationRepositorySqla,
+    PaymentRepositorySqla,
     UserRepositorySqla,
 )
 from app.schemas.auth import (
@@ -34,7 +36,16 @@ from app.schemas.auth import (
     StatsResponse,
 )
 from app.schemas.common import success
+from app.schemas.payment import MyPaymentsResponse, SubmitProofResponse
+from app.services.fees import build_upi_uri, calculate_registration_fee
+from app.services.payment_sqla import (
+    assert_team_edits_allowed,
+    build_payment_summary,
+    ensure_payment_for_registration,
+    submit_payment_proof,
+)
 from app.services.registration_sqla import register_team
+from app.utils.constants import CURRENCY
 from app.utils.serializers import sanitize
 from app.utils.validators import clean_mobile_number
 
@@ -117,6 +128,7 @@ async def register_team_route(
     current_user: dict = Depends(get_current_user),
     users: UserRepositorySqla = Depends(get_user_repo),
     event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+    payments: PaymentRepositorySqla = Depends(get_payment_repo),
 ):
     if payload.leaderId != current_user["userid"]:
         raise APIError(403, "Access denied. Leader ID mismatch.")
@@ -130,6 +142,8 @@ async def register_team_route(
     if not college or not department:
         raise APIError(400, "Leader profile incomplete. Missing college or department.")
 
+    assert_team_edits_allowed(await payments.find_by_leader(payload.leaderId))
+
     result = await register_team(
         session,
         event_regs,
@@ -139,11 +153,68 @@ async def register_team_route(
         college=college,
         department=department,
     )
+
+    unique_count = await event_regs.count_distinct_students(payload.leaderId)
+    amount_due = calculate_registration_fee(unique_count)
+    await ensure_payment_for_registration(
+        session, payments, payload.leaderId, amount_due, unique_count
+    )
+    payment = await payments.find_by_leader(payload.leaderId)
+
     return success(
         f"Team of {len(payload.participants)} registered for {payload.event}.",
         created=result["created"],
         updated=result["updated"],
+        uniqueStudents=unique_count,
+        amountDuePaises=amount_due,
+        currency=CURRENCY,
+        upiUri=build_upi_uri(payload.leaderId, amount_due),
+        paymentStatus=payment["paymentStatus"] if payment else "PENDING",
     )
+
+
+@router.get("/payments/mine", response_model=MyPaymentsResponse)
+async def my_payments(
+    current_user: dict = Depends(get_current_user),
+    event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+    payments: PaymentRepositorySqla = Depends(get_payment_repo),
+):
+    leader_id = current_user["userid"]
+    unique_count = await event_regs.count_distinct_students(leader_id)
+    amount_due = calculate_registration_fee(unique_count)
+    payment = await payments.find_by_leader(leader_id)
+    summary = build_payment_summary(payment, build_upi_uri(leader_id, amount_due))
+    return success(
+        "Payment details fetched successfully",
+        uniqueStudents=unique_count,
+        amountDuePaises=payment["expectedAmountPaises"] if payment else amount_due,
+        upiUri=summary["upiUri"],
+        data=sanitize(summary["payment"]),
+    )
+
+
+@router.post("/payments/proof", response_model=SubmitProofResponse)
+async def submit_proof_route(
+    session: AsyncSessionDep,
+    screenshot: UploadFile | None = File(None),
+    utr: str | None = Form(None),
+    amountPaises: int | None = Form(None),
+    current_user: dict = Depends(get_current_user),
+    event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+    payments: PaymentRepositorySqla = Depends(get_payment_repo),
+):
+    payment = await submit_payment_proof(
+        session,
+        payments,
+        event_regs,
+        leader_id=current_user["userid"],
+        utr_raw=utr,
+        amount_paises=amountPaises,
+        screenshot=screenshot,
+    )
+    return success("Payment proof submitted for verification",
+                   paymentId=payment["paymentId"],
+                   paymentStatus=payment["paymentStatus"])
 
 
 @router.post("/getcandidates", response_model=GetCandidatesResponse)

@@ -51,28 +51,26 @@ async def dashboard_stats(session: AsyncSession) -> dict:
         ).scalar_one()
     )
 
-    event_counts: dict[str, int] = {}
-    for event_name in EVENTS:
-        stmt_ev = select(Event.id).where(Event.name == event_name)
-        event_id = (await session.execute(stmt_ev)).scalars().first()
-        if event_id is None:
-            event_counts[event_name] = 0
-            continue
-        cnt = int(
-            (
-                await session.execute(
-                    select(func.count())
-                    .select_from(EventRegistration)
-                    .where(
-                        or_(
-                            EventRegistration.event1_id == event_id,
-                            EventRegistration.event2_id == event_id,
-                        )
-                    )
-                )
-            ).scalar_one()
+    # Single set-based query for every per-event count instead of one
+    # id-lookup + one COUNT per event (~16 round trips). Both event columns
+    # are UNION ALL'd and joined to events; a row can never have
+    # event1 = event2 (CHECK constraint), so nothing is double counted.
+    membership = select(EventRegistration.event1_id.label("event_id")).union_all(
+        select(EventRegistration.event2_id).where(
+            EventRegistration.event2_id.isnot(None)
         )
-        event_counts[event_name] = cnt
+    ).subquery()
+    count_rows = (
+        await session.execute(
+            select(Event.name, func.count())
+            .join(membership, Event.id == membership.c.event_id)
+            .group_by(Event.name)
+        )
+    ).all()
+    counts_by_name = {name: int(c) for name, c in count_rows}
+    event_counts: dict[str, int] = {
+        name: counts_by_name.get(name, 0) for name in EVENTS
+    }
 
     college_stats_rows = (
         await session.execute(

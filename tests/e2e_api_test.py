@@ -1,8 +1,8 @@
 """End-to-end API tests covering every migrated route.
 
-Requires a running MongoDB (default mongodb://localhost:27017). The suite
-uses its own database (aion_pytest_test) which is dropped and reseeded by
-the session fixture in conftest.py.
+Requires a running PostgreSQL at localhost:5432 (role aion/aion). The suite
+targets its own database (aion_pytest_test) which is dropped and rebuilt via
+`alembic upgrade head` by the session fixture in conftest.py.
 """
 
 import pytest
