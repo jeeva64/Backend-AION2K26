@@ -67,27 +67,40 @@ class LocalStorage:
         return self._path(key).is_file()
 
 
-class B2Storage:
-    """Private Backblaze B2 bucket via the S3-compatible API."""
+class S3Storage:
+    """S3-compatible storage (Neon Object Storage, Backblaze B2, MinIO, etc.)."""
 
     supports_signed_urls = True
 
-    def __init__(self, bucket: str, region: str, access_key_id: str, secret_key: str):
+    def __init__(
+        self,
+        bucket: str,
+        region: str,
+        access_key_id: str,
+        secret_key: str,
+        endpoint_url: str | None = None,
+        force_path_style: bool = False,
+    ):
         import boto3
         from botocore.config import Config
 
         if not all([bucket, region, access_key_id, secret_key]):
             raise ProofStorageError(
-                "PROOF_STORAGE_BACKEND=b2 requires B2_BUCKET, B2_REGION, "
-                "B2_ACCESS_KEY_ID and B2_SECRET_ACCESS_KEY in .env"
+                "S3 storage requires bucket, region, access_key_id, and secret_key"
             )
         self._bucket = bucket
+        # Neon needs a custom endpoint; B2 uses the default S3-compatible URL.
+        resolved_endpoint = endpoint_url or f"https://s3.{region}.backblazeb2.com"
+        addressing = "path" if force_path_style else "auto"
         self._client = boto3.client(
             "s3",
-            endpoint_url=f"https://s3.{region}.backblazeb2.com",
+            endpoint_url=resolved_endpoint,
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_key,
-            config=Config(signature_version="s3v4"),
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": addressing},
+            ),
         )
 
     def save(self, key: str, data: bytes, mime_type: str) -> None:
@@ -128,8 +141,17 @@ def get_proof_storage() -> ProofStorage:
     if _storage is not None:
         return _storage  # type: ignore[return-value]
     backend = settings.PROOF_STORAGE_BACKEND
-    if backend == "b2":
-        _storage = B2Storage(
+    if backend == "neon":
+        _storage = S3Storage(
+            bucket=settings.S3_BUCKET or "",
+            region=settings.S3_REGION or "",
+            access_key_id=settings.S3_ACCESS_KEY_ID or "",
+            secret_key=settings.S3_SECRET_ACCESS_KEY or "",
+            endpoint_url=settings.S3_ENDPOINT_URL,
+            force_path_style=settings.S3_FORCE_PATH_STYLE,
+        )
+    elif backend == "b2":
+        _storage = S3Storage(
             bucket=settings.B2_BUCKET or "",
             region=settings.B2_REGION or "",
             access_key_id=settings.B2_ACCESS_KEY_ID or "",

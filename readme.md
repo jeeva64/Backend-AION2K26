@@ -15,8 +15,10 @@ persists to **PostgreSQL** via SQLAlchemy 2.0 + asyncpg, with the schema owned b
 - Alembic 1.14 (schema migrations; seeds `event_slots`/`events` reference data)
 - PyJWT 2.10 (JWT auth)
 - bcrypt 4.3 (password hashing)
-- Pydantic 2.11 + pydantic-settings 2.8
+- Pydantic 2.11 + pydantic-settings 2.15
 - slowapi 0.1.9 (rate limiting)
+- boto3 — Neon Object Storage (S3-compatible, payment proof screenshots)
+- Pillow — payment screenshot content-sniffing (JPEG/PNG/WebP)
 - Motor 3.7 / PyMongo 4.11 *(legacy, migration window only — used by `scripts/migrate_mongo_to_postgres.py`)*
 
 ## Folder Structure
@@ -34,7 +36,8 @@ Backend-AION2K26-Winter/
 │   └── versions/
 │       ├── 0001_initial_schema.py          # all tables/CHECKs/indexes/trigger + seeds
 │       ├── 0002_seed_super_admin.py        # no-op placeholder (seeder is explicit)
-│       └── 0003_bid_mayhem_bidirectional.py# trg_bid_mayhem: BOTH rejected in either column
+│       ├── 0003_bid_mayhem_bidirectional.py# trg_bid_mayhem: BOTH rejected in either column
+│       └── 0004_registration_payments.py   # payments + payment_audit tables
 ├── scripts/
 │   ├── create_super_admin.py           # seed the first Super Admin (Postgres)
 │   ├── seed_reference_data.py          # re-seed events/slots (idempotent)
@@ -70,9 +73,13 @@ Backend-AION2K26-Winter/
     ├── repositories/       # legacy Motor repos (dormant, migration window)
     ├── services/
     │   ├── registration_sqla.py # team registration business logic (1 transaction)
+    │   ├── payment_sqla.py      # payment workflow (proof submit/verify/reject)
+    │   ├── fees.py              # fee math, UTR validation, UPI intent URI
     │   ├── stats_sqla.py        # SQL GROUP BY report queries
     │   ├── registration.py      # legacy Mongo implementation (kept for audit)
     │   └── stats.py             # legacy Mongo aggregations (kept for audit)
+    ├── storage/
+    │   └── proof_storage.py # S3Storage (Neon/B2) + LocalStorage (dev/tests)
     └── utils/
         ├── constants.py    # enums, event→slot map, limits
         ├── validators.py   # ported from simple-validators.js
@@ -95,13 +102,18 @@ Copy `.env.example` to `.env` and set real values:
 | `SQLA_ECHO`          | No       | Echo SQL in development (`false` default)                                |
 | `REGISTRATION_FEE_PER_STUDENT_PAISE` | No | Registration fee in integer paise (`20000` = Rs.200/student)    |
 | `PROOF_MAX_MB`       | No       | Payment screenshot size cap in MB (default `5`)                          |
-| `PROOF_STORAGE_BACKEND` | No    | `local` (dev/tests) or `b2` (Backblaze B2, production)                   |
+| `PROOF_STORAGE_BACKEND` | No    | `neon` (Neon Object Storage), `b2` (Backblaze B2), or `local` (dev/tests) |
 | `PROOF_LOCAL_DIR`    | No       | Local proof dir when backend is `local` (default `payment_proofs_local`) |
-| `B2_BUCKET` / `B2_REGION` / `B2_ACCESS_KEY_ID` / `B2_SECRET_ACCESS_KEY` | When `b2` | Private B2 bucket credentials (S3-compatible) |
+| `S3_ENDPOINT_URL`    | When `neon`/`b2` | S3-compatible endpoint URL (Neon branch endpoint or B2 S3 URL) |
+| `S3_ACCESS_KEY_ID`   | When `neon`/`b2` | S3 access key (Neon token_id or B2 application key ID)            |
+| `S3_SECRET_ACCESS_KEY` | When `neon`/`b2` | S3 secret key (Neon s3_secret_access_key or B2 application key)  |
+| `S3_BUCKET`          | When `neon`/`b2` | Private bucket name for payment proofs                          |
+| `S3_REGION`          | When `neon`/`b2` | Bucket region (e.g. `ap-southeast-1`)                            |
+| `S3_FORCE_PATH_STYLE` | No     | `true` for Neon; `false` for B2 (default `false`)                      |
+| `B2_BUCKET` / `B2_REGION` / `B2_ACCESS_KEY_ID` / `B2_SECRET_ACCESS_KEY` | Legacy | Legacy B2 settings (use `S3_*` instead) |
 | `UPI_VPA`            | No       | UPI ID shown to leaders; empty disables the QR/intent URI                |
 | `UPI_PAYEE_NAME`     | No       | Payee name embedded in the UPI intent URI                                |
 | `MONGO_URI`          | No       | Legacy source DB for the one-time migration script only                  |
-| `MONGO_DB`           | No       | Optional database override if not part of `MONGO_URI`                    |
 | `MONGO_RETAIN`       | No       | `true` keeps the Mongo lifespan active (default `false`)                 |
 | `JWT_SECRET`         | Yes      | Secret for signing JWTs (min 16 characters)                              |
 | `JWT_ALGORITHM`      | No       | Default `HS256`                                                          |

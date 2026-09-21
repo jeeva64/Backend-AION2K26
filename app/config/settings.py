@@ -37,9 +37,17 @@ class Settings(BaseSettings):
     # Money is stored/transferred as integer paise — never floats.
     REGISTRATION_FEE_PER_STUDENT_PAISE: int = 20000  # Rs.200 per unique student
     PROOF_MAX_MB: int = 5
-    # "b2" (Backblaze B2, production) | "local" (dev/tests, disk fallback)
+    # "neon" (Neon Object Storage) | "b2" (Backblaze B2) | "local" (dev/tests)
     PROOF_STORAGE_BACKEND: str = "local"
     PROOF_LOCAL_DIR: str = "payment_proofs_local"
+    # S3-compatible object storage (Neon / B2 / MinIO)
+    S3_ENDPOINT_URL: str | None = None
+    S3_ACCESS_KEY_ID: str | None = None
+    S3_SECRET_ACCESS_KEY: str | None = None
+    S3_BUCKET: str | None = None
+    S3_REGION: str | None = None
+    S3_FORCE_PATH_STYLE: bool = False
+    # Legacy B2 settings (mapped to S3_* when PROOF_STORAGE_BACKEND=b2)
     B2_BUCKET: str | None = None
     B2_REGION: str | None = None
     B2_ACCESS_KEY_ID: str | None = None
