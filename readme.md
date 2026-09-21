@@ -133,20 +133,19 @@ aborts when unreachable.
 ### First-run setup
 
 ```bash
-# 1. create role + database (run once as a PostgreSQL superuser)
-psql -U postgres -c "CREATE ROLE aion WITH LOGIN PASSWORD 'aion' CREATEDB;"
-psql -U postgres -c "CREATE DATABASE aion2026 OWNER aion;"
-
-# 2. apply the schema (Alembic owns every table/index/CHECK/trigger)
+# 1. apply the schema (Alembic owns every table/index/CHECK/trigger)
 .venv\Scripts\python -m alembic upgrade head
 
-# 3. seed the bootstrap Super Admin (chicken-and-egg: /admin/adminreg needs
+# 2. seed the bootstrap Super Admin (chicken-and-egg: /admin/adminreg needs
 #    a Super Admin token, so the first one is created out-of-band)
 .venv\Scripts\python scripts\create_super_admin.py SA1 Root "YourPassword"
 
-# 4. (optional) re-seed events/slots reference data after a schema bump
+# 3. (optional) re-seed events/slots reference data after a schema bump
 .venv\Scripts\python scripts\seed_reference_data.py
 ```
+
+> Requires a running Neon PostgreSQL database (`DATABASE_URL` in `.env`). The app
+> pings Postgres on startup and aborts if unreachable.
 
 > Rate limiting uses an in-memory store — valid per single uvicorn process. For
 > multi-worker deployments configure a shared store (Redis) via slowapi's
@@ -771,9 +770,9 @@ Key rules:
   stored and surfaced to the admin (Expected / Submitted / Difference); the
   Super Admin decides. A screenshot alone can never mark a payment successful.
 - **Proofs** (JPG/PNG/WebP, ≤ `PROOF_MAX_MB`, content-sniffed via Pillow) are
-  stored in a **private** B2 bucket (`PROOF_STORAGE_BACKEND=b2`) or on local
-  disk for dev/tests. Admin access is authenticated-only — signed URL or an
-  authorized streaming endpoint; screenshots are never public URLs.
+  stored in a **private** Neon Object Storage bucket (`PROOF_STORAGE_BACKEND=neon`)
+  or on local disk for dev/tests. Admin access is authenticated-only — signed URL
+  or an authorized streaming endpoint; screenshots are never public URLs.
 - Every action (created / proof submitted / verified / rejected / reopened) is
   recorded in the append-only `payment_audit` table.
 - Abandoned registrations stay in `PAYMENT_PENDING` forever — nothing is
