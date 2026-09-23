@@ -28,7 +28,7 @@ from app.repositories_sqla import (
 )
 from app.services.fees import calculate_registration_fee, normalize_utr
 from app.storage.proof_storage import ProofStorageError, get_proof_storage
-from app.utils.constants import ALLOWED_PROOF_FORMATS, PAYMENT_LOCKED_STATUSES
+from app.utils.constants import ALLOWED_PROOF_FORMATS
 
 _UTR_RE = re.compile(r"^[A-Za-z0-9]{8,22}$")
 
@@ -68,16 +68,6 @@ async def ensure_payment_for_registration(
             return existing
     await payments.update_expected_amount(leader_id, expected_paises)
     return await payments.find_by_leader(leader_id)
-
-
-def assert_team_edits_allowed(payment: dict | None) -> None:
-    """409 when team edits are locked (proof submitted or verified)."""
-    if payment and payment["paymentStatus"] in PAYMENT_LOCKED_STATUSES:
-        raise APIError(
-            409,
-            "Team changes are locked while your payment is under review or "
-            "confirmed. Contact an organizer for modifications.",
-        )
 
 
 def _validate_proof_file(data: bytes, filename: str) -> tuple[str, str]:
@@ -137,8 +127,10 @@ async def submit_payment_proof(
         # Idempotent retry of the same submission (double click / network retry).
         return payment
     if status == "SUCCESS":
-        raise APIError(409, "Payment is already verified.")
-    if status not in ("PENDING", "REJECTED"):
+        has_pending = await event_regs.has_pending_registrations(leader_id)
+        if not has_pending:
+            raise APIError(409, "Payment is already verified. No pending registrations found.")
+    elif status not in ("PENDING", "REJECTED"):
         raise APIError(409, "A different payment proof is already under review.")
 
     if not utr_raw or not utr_raw.strip():
@@ -175,7 +167,7 @@ async def submit_payment_proof(
             async with session.begin_nested():
                 rowcount = await payments.submit_proof_update(
                     payment["_id"],
-                    from_statuses=("PENDING", "REJECTED"),
+                    from_statuses=("PENDING", "REJECTED", "SUCCESS"),
                     utr=normalized_utr,
                     submitted_amount_paises=amount_paises,
                     proof_object_key=key,

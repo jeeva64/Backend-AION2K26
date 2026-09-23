@@ -106,12 +106,12 @@ def test_full_payment_lifecycle(client):
     leader_id, token = _register_leader(client, "life")
     headers = {"Authorization": f"Bearer {token}"}
 
-    r = _register_team(client, token, leader_id, "VisionX", count=2)
+    r = _register_team(client, token, leader_id, "VisionX", count=1)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
-    assert body["uniqueStudents"] == 2
-    assert body["amountDuePaises"] == 2 * fee
+    assert body["uniqueStudents"] == 1
+    assert body["amountDuePaises"] == 1 * fee
     assert body["currency"] == "INR"
     assert body["paymentStatus"] == "PENDING"
 
@@ -119,9 +119,9 @@ def test_full_payment_lifecycle(client):
     assert mine.status_code == 200
     m = mine.json()
     assert m["data"]["paymentStatus"] == "PENDING"
-    assert m["amountDuePaises"] == 2 * fee
+    assert m["amountDuePaises"] == 1 * fee
 
-    r = _submit_proof(client, token, amount=2 * fee, content=_png_bytes())
+    r = _submit_proof(client, token, amount=1 * fee, content=_png_bytes())
     assert r.status_code == 200, r.text
     assert r.json()["paymentStatus"] == "VERIFICATION_PENDING"
 
@@ -143,8 +143,8 @@ def test_full_payment_lifecycle(client):
     detail = client.get(f"/admin/payments/{payment_id}", headers=_super_admin_headers(client))
     assert detail.status_code == 200
     d = detail.json()
-    assert d["data"]["expectedAmountPaises"] == 2 * fee
-    assert d["data"]["submittedAmountPaises"] == 2 * fee
+    assert d["data"]["expectedAmountPaises"] == 1 * fee
+    assert d["data"]["submittedAmountPaises"] == 1 * fee
     actions = [a["action"] for a in d["audit"]]
     assert "CREATED" in actions and "PROOF_SUBMITTED" in actions
 
@@ -291,13 +291,16 @@ def test_reject_resubmit_and_invalid_transitions(client):
 
 
 def test_edit_lock_after_proof_submission(client):
+    """After removing payment lock, registration after proof submission is allowed
+    (only deadline blocks). This test verifies no 409 on re-register after proof."""
     fee = settings.REGISTRATION_FEE_PER_STUDENT_PAISE
     leader_id, token = _register_leader(client, "lock")
     assert _register_team(client, token, leader_id, "Treasure Titans", count=1).status_code == 200
     assert _submit_proof(client, token, amount=fee, content=_png_bytes()).status_code == 200
 
+    # Should succeed — no payment lock anymore
     r = _register_team(client, token, leader_id, "Fixathon", count=1)
-    assert r.status_code == 409 and "locked" in r.json()["message"].lower()
+    assert r.status_code == 200, r.text
 
 
 def test_reopen_rejected_payment_super_admin_only(client):

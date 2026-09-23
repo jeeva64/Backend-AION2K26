@@ -29,7 +29,9 @@ Backend-AION2K26-Winter/
 ├── requirements-dev.txt    # + pytest, httpx, pytest-asyncio, psycopg2-binary
 ├── .env.example            # copy to .env and fill real values
 ├── .env                    # local config (gitignored)
-├── run.py                  # uvicorn entry point
+├── .python-version         # pins Python 3.11 (Render reads this for new services)
+├── render.yaml             # Render deployment config (build/start commands, env vars)
+├── run.py                  # uvicorn entry point (dev only)
 ├── alembic.ini
 ├── alembic/
 │   ├── env.py              # async Alembic env (DATABASE_URL from settings)
@@ -37,7 +39,8 @@ Backend-AION2K26-Winter/
 │       ├── 0001_initial_schema.py          # all tables/CHECKs/indexes/trigger + seeds
 │       ├── 0002_seed_super_admin.py        # no-op placeholder (seeder is explicit)
 │       ├── 0003_bid_mayhem_bidirectional.py# trg_bid_mayhem: BOTH rejected in either column
-│       └── 0004_registration_payments.py   # payments + payment_audit tables
+│       ├── 0004_registration_payments.py   # payments + payment_audit tables
+│       └── 0005_event_settings.py          # event_settings singleton table (deadline)
 ├── scripts/
 │   ├── create_super_admin.py           # seed the first Super Admin (Postgres)
 │   ├── seed_reference_data.py          # re-seed events/slots (idempotent)
@@ -168,6 +171,43 @@ Or directly:
 - ReDoc: `http://localhost:5000/redoc`
 - OpenAPI JSON: `http://localhost:5000/openapi.json`
 - Health check: `GET /health`
+
+## Deployment (Render)
+
+The backend deploys to [Render](https://render.com) as a Python web service.
+
+**Key files:**
+- `.python-version` — pins Python 3.11 (Render reads this for new services; old services may need the version set in the dashboard)
+- `render.yaml` — defines build/start commands and non-sensitive env vars
+
+**Build command:** `pip install -r requirements.txt`
+
+**Start command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
+> `run.py` is for **local dev only** — it enables auto-reload when
+> `ENVIRONMENT=development`. Production uses `uvicorn` directly via
+> `render.yaml`.
+
+**Env vars to set in the Render dashboard (Settings → Environment):**
+
+| Key                        | Value / Notes                                                      |
+|----------------------------|--------------------------------------------------------------------|
+| `DATABASE_URL`             | Neon PostgreSQL DSN with `?sslmode=require`                        |
+| `JWT_SECRET`               | Strong random string, ≥32 chars (mark as **Sensitive**)            |
+| `ENVIRONMENT`              | `production`                                                       |
+| `RATE_LIMIT_ENABLED`       | `true`                                                             |
+| `PROOF_STORAGE_BACKEND`    | `neon`                                                             |
+| `S3_ENDPOINT_URL`          | Neon Object Storage endpoint                                       |
+| `S3_ACCESS_KEY_ID`         | Neon token (Sensitive)                                             |
+| `S3_SECRET_ACCESS_KEY`     | Neon secret (Sensitive)                                            |
+| `S3_BUCKET`                | Bucket name                                                        |
+| `S3_REGION`                | e.g. `ap-southeast-1`                                              |
+| `S3_FORCE_PATH_STYLE`      | `true`                                                             |
+
+`CORS_ORIGINS` should be set to your Vercel frontend URL (not `*`).
+
+**Frontend integration:** the Next.js frontend reads `NEXT_PUBLIC_API_BASE`
+(e.g. `https://your-app.onrender.com`) as a client-side env var on Vercel.
 
 ## Response Envelope
 
@@ -364,8 +404,10 @@ Request body:
 Rules enforced (`409` on violation):
 - Only one team per event per leader.
 - Max **15 students** total per leader.
+- **Per-event team size limits**: Fixathon(2), Mute Masters(2), Treasure Titans(2), Bid Mayhem(2), QRush(2), VisionX(1), ThinkSync(2), Crazy Sell(4). Exceeding the limit returns `400`.
 - **Bid Mayhem** occupies both slots — a student in Bid Mayhem cannot join other events, and Bid Mayhem cannot be combined with any other event.
 - Each student max **2 events**, no same-slot clash.
+- **Registration deadline**: if the admin has set a deadline, `/registerteam` returns `400` after the deadline passes. Payment submission (`/payments/proof`) is still allowed after the deadline.
 
 Success `200`:
 
@@ -419,7 +461,8 @@ Success `200`:
     "studentsRemaining": 13,
     "eventsRegistered": 1,
     "registeredEvents": ["Fixathon"]
-  }
+  },
+  "registrationDeadline": "2026-01-31T23:59:59+05:30"
 }
 ```
 
@@ -709,6 +752,47 @@ Success `200`:
 }
 ```
 
+### `PUT /admin/registration-deadline`
+Set or clear the global registration deadline. **Requires Super Admin Bearer token** (`adminRole: 1`).
+
+Request body:
+
+```json
+{
+  "registrationDeadline": "2026-01-31T23:59:59+05:30"
+}
+```
+
+- `registrationDeadline`: ISO 8601 datetime with timezone offset. Must be a future date with timezone.
+- To clear the deadline, send `"registrationDeadline": "none"` (or `"null"`, `"remove"`, `""`).
+
+Validation (`400` on failure):
+- `registrationDeadline` is required.
+- Must be a valid ISO 8601 datetime with timezone offset.
+
+Success `200`:
+
+```json
+{
+  "success": true,
+  "message": "Registration deadline set",
+  "registrationDeadline": "2026-01-31T23:59:59+05:30"
+}
+```
+
+### `GET /admin/registration-deadline`
+Get the current registration deadline. **Requires Super Admin Bearer token.**
+
+Success `200`:
+
+```json
+{
+  "success": true,
+  "message": "Registration deadline fetched",
+  "registrationDeadline": "2026-01-31T23:59:59+05:30"
+}
+```
+
 ### `GET /health`
 Liveness check. Public.
 
@@ -740,20 +824,29 @@ An event not in this map is rejected with `400` on `/registerteam`.
 Registration is **not confirmed until the payment passes manual verification**.
 
 ```
+/regleader ──► leader account created (blocked after registration deadline)
+              deadline is global, admin-set via PUT /admin/registration-deadline
+
 /registerteam ──► rows created with status = PAYMENT_PENDING
                   payment row created (one per leader, UNIQUE)
                   amount = ₹200 × unique students (backend-calculated)
+                  blocked after registration deadline (payment proof still allowed)
         ↓
 Leader pays via UPI (QR / intent URI from GET /payments/mine)
         ↓
 POST /payments/proof  (UTR + amount + screenshot)
   payment → VERIFICATION_PENDING, registrations → VERIFICATION_PENDING
-  team edits are LOCKED while under review
+  (no payment lock — team edits are always allowed now)
         ↓
 Super Admin reviews at GET /admin/payments
   ├── POST .../verify  → payment SUCCESS + registrations CONFIRMED (atomic)
   └── POST .../reject {reason} → payment REJECTED + registrations back to
       PAYMENT_PENDING (leader may resubmit; Super Admin may reopen)
+
+Post-verification expansion (after SUCCESS):
+  Leader can register more students → new rows are PAYMENT_PENDING
+  Leader submits supplementary proof via POST /payments/proof
+  (payment transitions SUCCESS → VERIFICATION_PENDING for new students)
 ```
 
 Key rules:
@@ -777,13 +870,17 @@ Key rules:
   recorded in the append-only `payment_audit` table.
 - Abandoned registrations stay in `PAYMENT_PENDING` forever — nothing is
   auto-deleted.
+- **Per-event team size limits**: Fixathon(2), Mute Masters(2), Treasure Titans(2), Bid Mayhem(2), QRush(2), VisionX(1), ThinkSync(2), Crazy Sell(4). Enforced at registration time.
+- **Registration deadline**: if set by Super Admin, blocks `/regleader` and `/registerteam` after the deadline. Payment proof submission (`/payments/proof`) is still allowed after the deadline.
 
 ### Payment endpoints
 
 Leader (Bearer token):
 
-- `GET /payments/mine` — status, payable amount, UPI intent URI.
+- `GET /payments/mine` — status, payable amount, UPI intent URI, `registrationDeadline`.
 - `POST /payments/proof` — multipart: `utr`, `amountPaises`, `screenshot`.
+  - First submission: PENDING/REJECTED → VERIFICATION_PENDING.
+  - Supplementary (after SUCCESS): SUCCESS → VERIFICATION_PENDING (new students only).
 
 Super Admin only (`adminRole: 1`):
 

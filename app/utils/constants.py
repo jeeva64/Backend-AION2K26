@@ -28,6 +28,17 @@ EVENTS = [
 
 MAX_STUDENTS_PER_LEADER = 15
 
+EVENT_MAX_TEAM_SIZE = {
+    "Fixathon": 2,
+    "Mute Masters": 2,
+    "Treasure Titans": 2,
+    "Bid Mayhem": 2,
+    "QRush": 2,
+    "VisionX": 1,
+    "ThinkSync": 2,
+    "Crazy Sell": 4,
+}
+
 REGISTRATION_STATUSES = [
     "PAYMENT_PENDING",
     "VERIFICATION_PENDING",
@@ -46,7 +57,5 @@ PAYMENT_AUDIT_ACTIONS = [
 ]
 
 CURRENCY = "INR"
-
-PAYMENT_LOCKED_STATUSES = ("VERIFICATION_PENDING", "SUCCESS")
 
 ALLOWED_PROOF_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}

@@ -25,6 +25,7 @@ class MyPaymentsResponse(APIResponse):
     amountDuePaises: int
     upiUri: str | None = None
     data: dict | None = None
+    registrationDeadline: str | None = None
 
 
 class PaymentListResponse(APIResponse):

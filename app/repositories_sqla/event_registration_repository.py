@@ -111,6 +111,15 @@ class EventRegistrationRepositorySqla:
         result = await self._session.execute(stmt)
         return int(result.scalar_one())
 
+    async def has_pending_registrations(self, leader_id: str) -> bool:
+        """True when leader has students in PAYMENT_PENDING (needs supplementary pay)."""
+        stmt = select(func.count()).select_from(EventRegistration).where(
+            EventRegistration.leader_id == leader_id,
+            EventRegistration.status == "PAYMENT_PENDING",
+        )
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one()) > 0
+
     async def count_distinct_students(self, leader_id: str) -> int:
         """Unique students for a leader — the fee basis.
 

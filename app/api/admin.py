@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy.exc import IntegrityError
 
+from datetime import datetime, timezone
+
 from app.auth.dependencies import get_current_admin, get_current_super_admin
 from app.auth.security import create_access_token, hash_password, verify_password
 from app.config.settings import settings
@@ -10,6 +12,7 @@ from app.dependencies.repositories import (
     get_admin_repo,
     get_college_repo,
     get_event_regs_repo,
+    get_event_settings_repo,
     get_payment_repo,
     get_user_repo,
 )
@@ -19,6 +22,7 @@ from app.repositories_sqla import (
     AdminRepositorySqla,
     CollegeRepositorySqla,
     EventRegistrationRepositorySqla,
+    EventSettingsRepositorySqla,
     PaymentRepositorySqla,
     UserRepositorySqla,
 )
@@ -30,9 +34,11 @@ from app.schemas.admin import (
     AdminRegisterRequest,
     AdminRegisterResponse,
     DashboardStatsResponse,
+    DeadlineResponse,
     DeleteTeamByEventResponse,
     DeleteTeamResponse,
     LeaderCollegeDeptsResponse,
+    SetDeadlineRequest,
     UpdateCollegeRequest,
     UpdateCollegeResponse,
     ViewEventRegsRequest,
@@ -380,3 +386,35 @@ async def reopen_payment_route(
         "Payment reopened for review.",
         paymentStatus=payment["paymentStatus"],
     )
+
+
+@router.put("/registration-deadline", response_model=DeadlineResponse)
+async def set_registration_deadline(
+    payload: SetDeadlineRequest,
+    current_admin: dict = Depends(get_current_super_admin),
+    event_settings: EventSettingsRepositorySqla = Depends(get_event_settings_repo),
+):
+    if current_admin.get("adminRole") != 1:
+        raise APIError(403, "Only Super Admin can set registration deadline")
+    raw = payload.registrationDeadline.strip()
+    if raw.lower() in ("none", "null", "remove", ""):
+        await event_settings.set_deadline(None)
+        return success("Registration deadline cleared", registrationDeadline=None)
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        raise APIError(400, "Invalid datetime format. Use ISO 8601 (e.g. 2026-01-31T23:59:59+05:30)")
+    if dt.tzinfo is None:
+        raise APIError(400, "DateTime must include timezone offset (e.g. +05:30)")
+    await event_settings.set_deadline(dt)
+    return success("Registration deadline set", registrationDeadline=dt.isoformat())
+
+
+@router.get("/registration-deadline", response_model=DeadlineResponse)
+async def get_registration_deadline(
+    current_admin: dict = Depends(get_current_super_admin),
+    event_settings: EventSettingsRepositorySqla = Depends(get_event_settings_repo),
+):
+    deadline = await event_settings.get_deadline()
+    iso = deadline.isoformat() if deadline else None
+    return success("Registration deadline fetched", registrationDeadline=iso)

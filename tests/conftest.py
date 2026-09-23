@@ -52,7 +52,7 @@ async def _reset_schema() -> None:
                 text(
                     "DROP TABLE IF EXISTS payment_audit, payments, "
                     "event_registrations, users, admins, colleges, events, "
-                    "event_slots, alembic_version CASCADE"
+                    "event_slots, event_settings, alembic_version CASCADE"
                 )
             )
     finally:
@@ -122,7 +122,8 @@ def _clear_registrations(client):
             async with eng.begin() as conn:
                 await conn.execute(
                     text(
-                        "TRUNCATE payment_audit, payments, event_registrations "
+                        "TRUNCATE payment_audit, payments, event_registrations, "
+                        "event_settings "
                         "RESTART IDENTITY CASCADE"
                     )
                 )

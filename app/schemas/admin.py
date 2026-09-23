@@ -151,3 +151,19 @@ class UpdateCollegeResponse(APIResponse):
 
 class LeaderCollegeDeptsResponse(APIResponse):
     data: list[dict]
+
+
+class SetDeadlineRequest(BaseModel):
+    registrationDeadline: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_field(cls, data):
+        if isinstance(data, dict):
+            if not data.get("registrationDeadline"):
+                raise ValueError("registrationDeadline is required")
+        return data
+
+
+class DeadlineResponse(APIResponse):
+    registrationDeadline: str | None = None

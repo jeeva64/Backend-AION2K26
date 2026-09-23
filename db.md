@@ -5,6 +5,12 @@
 > documents the legacy Mongo collections that
 > `scripts/migrate_mongo_to_postgres.py` reads as its source. For the current
 > schema see `MIGRATION.md` §1 and `alembic/versions/`.
+>
+> **New tables in PostgreSQL (not in MongoDB):**
+> - `event_registrations` — replaces `eventregistrations` collection
+> - `payments` — one row per leader (payment proof submission workflow)
+> - `payment_audit` — append-only action history for payments
+> - `event_settings` — singleton row (id=1) holding `registration_deadline TIMESTAMPTZ`
 
 The backend uses MongoDB via the async Motor driver. It connects to the **same database as the original Express/Mongoose backend**, so all collection and field names are unchanged.
 

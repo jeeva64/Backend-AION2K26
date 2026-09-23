@@ -183,6 +183,7 @@ class GetCandidatesResponse(APIResponse):
 
 class StatsResponse(APIResponse):
     stats: dict
+    registrationDeadline: str | None = None
 
 
 class AddCollegeResponse(APIResponse):

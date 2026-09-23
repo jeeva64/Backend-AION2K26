@@ -1,5 +1,6 @@
 import secrets
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +12,7 @@ from app.dependencies.db import AsyncSessionDep
 from app.dependencies.repositories import (
     get_college_repo,
     get_event_regs_repo,
+    get_event_settings_repo,
     get_payment_repo,
     get_user_repo,
 )
@@ -19,6 +21,7 @@ from app.middleware.rate_limit import limiter
 from app.repositories_sqla import (
     CollegeRepositorySqla,
     EventRegistrationRepositorySqla,
+    EventSettingsRepositorySqla,
     PaymentRepositorySqla,
     UserRepositorySqla,
 )
@@ -39,7 +42,6 @@ from app.schemas.common import success
 from app.schemas.payment import MyPaymentsResponse, SubmitProofResponse
 from app.services.fees import build_upi_uri, calculate_registration_fee
 from app.services.payment_sqla import (
-    assert_team_edits_allowed,
     build_payment_summary,
     ensure_payment_for_registration,
     submit_payment_proof,
@@ -65,7 +67,12 @@ async def register_leader(
     session: AsyncSessionDep,
     users: UserRepositorySqla = Depends(get_user_repo),
     colleges: CollegeRepositorySqla = Depends(get_college_repo),
+    event_settings: EventSettingsRepositorySqla = Depends(get_event_settings_repo),
 ):
+    deadline = await event_settings.get_deadline()
+    if deadline and datetime.now(timezone.utc) > deadline:
+        raise APIError(400, "Registration deadline has passed. Contact an organizer to register.")
+
     normalized_email = payload.email.strip().lower()
     if await users.find_by_email(normalized_email):
         raise APIError(400, "Email already registered")
@@ -129,6 +136,7 @@ async def register_team_route(
     users: UserRepositorySqla = Depends(get_user_repo),
     event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
     payments: PaymentRepositorySqla = Depends(get_payment_repo),
+    event_settings: EventSettingsRepositorySqla = Depends(get_event_settings_repo),
 ):
     if payload.leaderId != current_user["userid"]:
         raise APIError(403, "Access denied. Leader ID mismatch.")
@@ -142,7 +150,9 @@ async def register_team_route(
     if not college or not department:
         raise APIError(400, "Leader profile incomplete. Missing college or department.")
 
-    assert_team_edits_allowed(await payments.find_by_leader(payload.leaderId))
+    deadline = await event_settings.get_deadline()
+    if deadline and datetime.now(timezone.utc) > deadline:
+        raise APIError(400, "Registration deadline has passed. Contact an organizer to register.")
 
     result = await register_team(
         session,
@@ -178,18 +188,21 @@ async def my_payments(
     current_user: dict = Depends(get_current_user),
     event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
     payments: PaymentRepositorySqla = Depends(get_payment_repo),
+    event_settings: EventSettingsRepositorySqla = Depends(get_event_settings_repo),
 ):
     leader_id = current_user["userid"]
     unique_count = await event_regs.count_distinct_students(leader_id)
     amount_due = calculate_registration_fee(unique_count)
     payment = await payments.find_by_leader(leader_id)
     summary = build_payment_summary(payment, build_upi_uri(leader_id, amount_due))
+    deadline = await event_settings.get_deadline()
     return success(
         "Payment details fetched successfully",
         uniqueStudents=unique_count,
         amountDuePaises=payment["expectedAmountPaises"] if payment else amount_due,
         upiUri=summary["upiUri"],
         data=sanitize(summary["payment"]),
+        registrationDeadline=deadline.isoformat() if deadline else None,
     )
 
 
@@ -250,6 +263,7 @@ async def get_stats(
     leader_id: str,
     current_user: dict = Depends(get_current_user),
     event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+    event_settings: EventSettingsRepositorySqla = Depends(get_event_settings_repo),
 ):
     if leader_id != current_user["userid"]:
         raise APIError(403, "Access denied. Leader ID mismatch.")
@@ -263,6 +277,7 @@ async def get_stats(
         if student.get("event2"):
             registered_events.add(student["event2"])
 
+    deadline = await event_settings.get_deadline()
     return success(
         "Stats fetched successfully",
         stats={
@@ -271,6 +286,7 @@ async def get_stats(
             "eventsRegistered": len(registered_events),
             "registeredEvents": list(registered_events),
         },
+        registrationDeadline=deadline.isoformat() if deadline else None,
     )
 
 

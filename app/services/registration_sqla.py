@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.exceptions.api_error import APIError
 from app.models_sqla.event import Event, EventSlot
 from app.models_sqla.event_registration import EventRegistration
-from app.utils.constants import FOOD_PREFERENCES, MAX_STUDENTS_PER_LEADER
+from app.utils.constants import EVENT_MAX_TEAM_SIZE, FOOD_PREFERENCES, MAX_STUDENTS_PER_LEADER
 from app.utils.validators import clean_participant_mobile
 
 _PARTICIPANT_MOBILE = re.compile(r"^[6-9]\d{9}$")
@@ -52,6 +52,13 @@ async def register_team(
         )
 
     reg_numbers = [(p.registerNumber or "").upper() for p in participants]
+
+    max_team = EVENT_MAX_TEAM_SIZE.get(event, 2)
+    if len(participants) > max_team:
+        raise APIError(
+            400,
+            f"{event} allows a maximum of {max_team} members per team.",
+        )
 
     seen: set[str] = set()
     for reg_number in reg_numbers:
