@@ -18,14 +18,9 @@ class EventSettingsRepositorySqla:
         return obj.registration_deadline if obj else None
 
     async def set_deadline(self, deadline: datetime | None) -> None:
-        exists = await self.get_deadline()
-        if exists is None:
-            self._session.add(EventSettings(id=1, registration_deadline=deadline))
-            await self._session.flush()
-        else:
-            await self._session.execute(
-                update(EventSettings)
-                .where(EventSettings.id == 1)
-                .values(registration_deadline=deadline)
-            )
-            await self._session.flush()
+        await self._session.execute(
+            update(EventSettings)
+            .where(EventSettings.id == 1)
+            .values(registration_deadline=deadline)
+        )
+        await self._session.flush()
