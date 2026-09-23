@@ -4,7 +4,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models_sqla.event_settings import EventSettings
-from app.repositories_sqla.base import mapping_one
 
 
 class EventSettingsRepositorySqla:
@@ -12,10 +11,11 @@ class EventSettingsRepositorySqla:
         self._session = session
 
     async def get_deadline(self) -> datetime | None:
-        row = await mapping_one(
-            self._session, select(EventSettings).where(EventSettings.id == 1)
+        result = await self._session.execute(
+            select(EventSettings).where(EventSettings.id == 1)
         )
-        return row["registration_deadline"] if row else None
+        obj = result.scalar_one_or_none()
+        return obj.registration_deadline if obj else None
 
     async def set_deadline(self, deadline: datetime | None) -> None:
         exists = await self.get_deadline()
