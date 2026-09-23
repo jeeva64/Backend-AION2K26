@@ -300,18 +300,14 @@ async def payment_proof_url(
     if not payment["proofObjectKey"]:
         raise APIError(404, "No proof uploaded for this payment")
 
-    storage = get_proof_storage()
-    if storage.supports_signed_urls:
-        url = storage.signed_url(payment["proofObjectKey"], expires_in=300)
-        expires = 300
-    else:
-        # Local/dev backend — stream through the authorized content endpoint.
-        url = f"/admin/payments/{payment_id}/proof/content"
-        expires = 300
+    # Always stream through the authorized content endpoint. Direct Neon
+    # storage URLs break the local frontend (CORS 403 on cross-origin load);
+    # the content path is same-API and only needs the admin Bearer token.
+    url = f"/admin/payments/{payment_id}/proof/content"
     return success(
         "Proof URL generated",
         url=url,
-        expiresIn=expires,
+        expiresIn=300,
         mimeType=payment["proofMimeType"],
         originalFilename=payment["proofOriginalFilename"],
     )

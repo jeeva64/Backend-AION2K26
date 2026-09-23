@@ -94,6 +94,7 @@ class S3Storage:
         addressing = "path" if force_path_style else "auto"
         self._client = boto3.client(
             "s3",
+            region_name=region,
             endpoint_url=resolved_endpoint,
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_key,
