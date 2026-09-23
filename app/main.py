@@ -39,13 +39,14 @@ async def lifespan(app: FastAPI):
         await connect_mongo()
         logger.info("MongoDB (legacy, RETAIN=true) connected")
 
-    yield
+    try:
+        yield
+    finally:
+        await close_sqla()
+        if settings.MONGO_RETAIN and settings.MONGO_URI:
+            from app.db.mongo import close_db as close_mongo
 
-    await close_sqla()
-    if settings.MONGO_RETAIN and settings.MONGO_URI:
-        from app.db.mongo import close_db as close_mongo
-
-        await close_mongo()
+            await close_mongo()
 
 
 app = FastAPI(
