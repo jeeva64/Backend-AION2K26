@@ -5,7 +5,21 @@ targets its own database (aion_pytest_test) which is dropped and rebuilt via
 `alembic upgrade head` by the session fixture in conftest.py.
 """
 
+import io
+import random
+import uuid
+
 import pytest
+
+from app.config.settings import settings
+
+
+def _png_bytes(w=60, h=40) -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), (30, 64, 175)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def test_full_flow(client):
@@ -142,6 +156,31 @@ def test_full_flow(client):
 
     r = client.post("/admin/vieweventregs", headers=h, json={"eventName": "Nope"})
     assert r.status_code == 404
+
+    # Submit payment proof and verify so dashboard stats counts these members
+    fee = settings.REGISTRATION_FEE_PER_STUDENT_PAISE
+    utr = f"UTR{random.randint(100000000, 999999999)}"
+    r = client.post(
+        "/payments/proof",
+        headers=lh,
+        data={"utr": utr, "amountPaises": str(2 * fee)},
+        files={"screenshot": ("proof.png", _png_bytes(), "image/png")},
+    )
+    assert r.status_code == 200
+
+    # Find payment ID for verification
+    r = client.get("/admin/payments", headers=h)
+    assert r.status_code == 200
+    payments_data = r.json()["data"]
+    payment_id = None
+    for p in payments_data:
+        if p["leaderId"] == leader_id:
+            payment_id = p["paymentId"]
+            break
+    assert payment_id is not None
+
+    r = client.post(f"/admin/payments/{payment_id}/verify", headers=h)
+    assert r.status_code == 200
 
     r = client.get("/admin/dashboardstats", headers=h)
     assert r.status_code == 200

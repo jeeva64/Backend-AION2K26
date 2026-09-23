@@ -167,3 +167,26 @@ class SetDeadlineRequest(BaseModel):
 
 class DeadlineResponse(APIResponse):
     registrationDeadline: str | None = None
+
+
+class UpdateRegistrationRequest(BaseModel):
+    name: str | None = None
+    registerNumber: str | None = None
+    mobile: str | None = None
+    degree: str | None = None
+    foodPreference: str | None = None
+    event1: str | None = None
+    event2: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_at_least_one(cls, data):
+        if isinstance(data, dict):
+            allowed = {"name", "registerNumber", "mobile", "degree", "foodPreference", "event1", "event2"}
+            if not any(k in data and data[k] is not None for k in allowed):
+                raise ValueError("At least one field must be provided for update")
+        return data
+
+
+class UpdateRegistrationResponse(APIResponse):
+    pass

@@ -1,4 +1,4 @@
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models_sqla.admin import Admin
@@ -200,6 +200,27 @@ class PaymentRepositorySqla:
             )
         )
         await self._session.flush()
+
+    async def delete_by_leader(self, leader_id: str) -> int:
+        """Delete all payment records for a leader. Returns deleted count."""
+        stmt = (
+            delete(Payment)
+            .where(Payment.leader_id == leader_id)
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        return result.rowcount or 0
+
+    async def delete_audit_by_leader(self, leader_id: str) -> int:
+        """Delete audit rows for a leader's payments. Returns deleted count."""
+        subq = select(Payment.id).where(Payment.leader_id == leader_id).subquery()
+        stmt = (
+            delete(PaymentAudit)
+            .where(PaymentAudit.payment_id.in_(select(subq.c.id)))
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        return result.rowcount or 0
 
     async def list_audit(self, payment_id: int) -> list[dict]:
         stmt = (

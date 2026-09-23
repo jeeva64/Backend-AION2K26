@@ -11,17 +11,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models_sqla.event import Event, EventSlot
 from app.models_sqla.event_registration import EventRegistration
+from app.models_sqla.payment import Payment
 from app.utils.constants import EVENTS
 
 
 async def dashboard_stats(session: AsyncSession) -> dict:
+    # Subquery: leaders with SUCCESS payment
+    success_leaders = (
+        select(Payment.leader_id)
+        .where(Payment.payment_status == "SUCCESS")
+        .distinct()
+        .subquery()
+    )
+    # Base query: only registrations from leaders with SUCCESS payment
+    base = (
+        select(EventRegistration)
+        .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
+    )
+
     total_members = int(
-        (await session.execute(select(func.count()).select_from(EventRegistration))).scalar_one()
+        (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     )
 
     food_rows = (
         await session.execute(
             select(EventRegistration.food_preference, func.count())
+            .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
             .group_by(EventRegistration.food_preference)
         )
     ).all()
@@ -31,6 +46,7 @@ async def dashboard_stats(session: AsyncSession) -> dict:
     degree_rows = (
         await session.execute(
             select(EventRegistration.degree, func.count())
+            .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
             .group_by(EventRegistration.degree)
         )
     ).all()
@@ -47,17 +63,18 @@ async def dashboard_stats(session: AsyncSession) -> dict:
                         EventRegistration.department,
                     )
                 )))
+                .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
             )
         ).scalar_one()
     )
 
-    # Single set-based query for every per-event count instead of one
-    # id-lookup + one COUNT per event (~16 round trips). Both event columns
-    # are UNION ALL'd and joined to events; a row can never have
-    # event1 = event2 (CHECK constraint), so nothing is double counted.
-    membership = select(EventRegistration.event1_id.label("event_id")).union_all(
-        select(EventRegistration.event2_id).where(
-            EventRegistration.event2_id.isnot(None)
+    membership = (
+        select(EventRegistration.event1_id.label("event_id"))
+        .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
+        .union_all(
+            select(EventRegistration.event2_id)
+            .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
+            .where(EventRegistration.event2_id.isnot(None))
         )
     ).subquery()
     count_rows = (
@@ -91,6 +108,7 @@ async def dashboard_stats(session: AsyncSession) -> dict:
                     )
                 ).label("nonVeg"),
             )
+            .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
             .group_by(
                 EventRegistration.college_name_text,
                 EventRegistration.department,
@@ -111,6 +129,7 @@ async def dashboard_stats(session: AsyncSession) -> dict:
     dept_rows = (
         await session.execute(
             select(EventRegistration.department, func.count())
+            .join(success_leaders, EventRegistration.leader_id == success_leaders.c.leader_id)
             .group_by(EventRegistration.department)
         )
     ).all()

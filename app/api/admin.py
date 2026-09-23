@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from datetime import datetime, timezone
@@ -41,6 +42,8 @@ from app.schemas.admin import (
     SetDeadlineRequest,
     UpdateCollegeRequest,
     UpdateCollegeResponse,
+    UpdateRegistrationRequest,
+    UpdateRegistrationResponse,
     ViewEventRegsRequest,
     ViewEventRegsResponse,
     ViewTeamRequest,
@@ -61,7 +64,7 @@ from app.services.payment_sqla import (
 )
 from app.services.stats_sqla import dashboard_stats, view_event_regs
 from app.storage.proof_storage import get_proof_storage
-from app.utils.constants import PAYMENT_STATUSES
+from app.utils.constants import EVENT_SLOT_MAP, PAYMENT_STATUSES
 from app.utils.serializers import sanitize
 
 router = APIRouter()
@@ -168,14 +171,18 @@ async def delete_team(
     leader_id: str,
     current_admin: dict = Depends(get_current_admin),
     event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+    payments: PaymentRepositorySqla = Depends(get_payment_repo),
 ):
     team_count = await event_regs.count_by_leader(leader_id)
     if team_count == 0:
         raise APIError(404, "No team found for this leader")
 
+    # Delete payment audit rows first (FK dependency), then payment, then registrations
+    await payments.delete_audit_by_leader(leader_id)
+    await payments.delete_by_leader(leader_id)
     deleted = await event_regs.delete_many_by_leader(leader_id)
     return success(
-        f"Deleted {deleted} team member(s) for leader {leader_id}",
+        f"Deleted {deleted} team member(s) and payment records for leader {leader_id}",
         deletedCount=deleted,
     )
 
@@ -186,6 +193,7 @@ async def delete_team_by_event(
     event: str,
     current_admin: dict = Depends(get_current_admin),
     event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+    payments: PaymentRepositorySqla = Depends(get_payment_repo),
 ):
     members = await event_regs.find_by_leader_and_event(leader_id, event)
     if not members:
@@ -204,6 +212,12 @@ async def delete_team_by_event(
         elif doc.get("event2") == event:
             await event_regs.clear_event2(doc["_id"])
             updated += 1
+
+    # If all registrations for this leader are gone, clean up payment records too
+    remaining = await event_regs.count_by_leader(leader_id)
+    if remaining == 0:
+        await payments.delete_audit_by_leader(leader_id)
+        await payments.delete_by_leader(leader_id)
 
     return success(
         f"Team removed from {event}. {updated} member(s) updated, {deleted} member(s) deleted.",
@@ -386,6 +400,61 @@ async def reopen_payment_route(
         "Payment reopened for review.",
         paymentStatus=payment["paymentStatus"],
     )
+
+
+@router.put("/registration/{reg_id}", response_model=UpdateRegistrationResponse)
+async def update_registration(
+    reg_id: int,
+    payload: UpdateRegistrationRequest,
+    current_admin: dict = Depends(get_current_admin),
+    event_regs: EventRegistrationRepositorySqla = Depends(get_event_regs_repo),
+):
+    existing = await event_regs.find_by_id(reg_id)
+    if not existing:
+        raise APIError(404, "Registration not found")
+
+    # Build update dict from non-None fields
+    updates = {}
+    if payload.name is not None:
+        updates["name"] = payload.name.strip()
+    if payload.registerNumber is not None:
+        updates["register_number"] = payload.registerNumber.strip().upper()
+    if payload.mobile is not None:
+        updates["mobile"] = payload.mobile.strip()
+    if payload.degree is not None:
+        updates["degree"] = payload.degree.strip().lower()
+    if payload.foodPreference is not None:
+        updates["food_preference"] = payload.foodPreference.strip().lower()
+    if payload.event1 is not None:
+        if payload.event1 not in EVENT_SLOT_MAP:
+            raise APIError(400, f"Invalid event1: {payload.event1}")
+        from app.models_sqla.event import Event
+        ev1 = (await event_regs._session.execute(
+            select(Event.id).where(Event.name == payload.event1)
+        )).scalars().first()
+        if ev1 is None:
+            raise APIError(400, f"Event not found: {payload.event1}")
+        updates["event1_id"] = ev1
+    if payload.event2 is not None:
+        if payload.event2.lower() in ("none", "null", ""):
+            updates["event2_id"] = None
+            updates["slot2_id"] = None
+        else:
+            if payload.event2 not in EVENT_SLOT_MAP:
+                raise APIError(400, f"Invalid event2: {payload.event2}")
+            from app.models_sqla.event import Event
+            ev2 = (await event_regs._session.execute(
+                select(Event.id).where(Event.name == payload.event2)
+            )).scalars().first()
+            if ev2 is None:
+                raise APIError(400, f"Event not found: {payload.event2}")
+            updates["event2_id"] = ev2
+
+    if not updates:
+        raise APIError(400, "No fields to update")
+
+    await event_regs.update_fields(reg_id, **updates)
+    return success("Registration updated successfully")
 
 
 @router.put("/registration-deadline", response_model=DeadlineResponse)

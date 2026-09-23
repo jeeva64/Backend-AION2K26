@@ -236,3 +236,20 @@ class EventRegistrationRepositorySqla:
             )
         )
         return int((await self._session.execute(stmt)).scalar_one())
+
+    async def find_by_id(self, reg_id: int) -> dict | None:
+        stmt = select(EventRegistration).where(EventRegistration.id == reg_id)
+        result = await self._session.execute(stmt)
+        obj = result.scalars().first()
+        return await self._hydrate(obj) if obj else None
+
+    async def update_fields(self, reg_id: int, **fields) -> int:
+        """Update arbitrary fields on a registration row. Returns rowcount."""
+        stmt = (
+            update(EventRegistration)
+            .where(EventRegistration.id == reg_id)
+            .values(**fields)
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        return result.rowcount or 0
