@@ -2,7 +2,8 @@
 
 Covers: registration -> PAYMENT_PENDING -> proof upload -> VERIFICATION_PENDING
 -> admin verification -> CONFIRMED, plus rejection/resubmit/reopen, UTR
-duplication, amount-mismatch flagging, edit locks, idempotent resubmission,
+duplication, amount-mismatch flagging, edit locks (409 while under
+review/rejected, allowed after SUCCESS), idempotent resubmission,
 file validation, and authorization (moderator vs Super Admin).
 """
 import io
@@ -271,6 +272,11 @@ def test_reject_resubmit_and_invalid_transitions(client):
                     json={"reason": "Screenshot unreadable"})
     assert r.status_code == 200 and r.json()["paymentStatus"] == "REJECTED"
 
+    # Rejected payments lock team edits until a new proof is verified.
+    r = _register_team(client, token, leader_id, "QRush", count=1)
+    assert r.status_code == 409, r.text
+    assert "rejected" in r.json()["message"].lower()
+
     cands = client.post("/getcandidates", headers=headers, json={"user_id": leader_id}).json()
     assert all(doc["status"] == "PAYMENT_PENDING" for doc in cands["data"])
 
@@ -290,15 +296,29 @@ def test_reject_resubmit_and_invalid_transitions(client):
     assert same.status_code == 200
 
 
-def test_edit_lock_after_proof_submission(client):
-    """After removing payment lock, registration after proof submission is allowed
-    (only deadline blocks). This test verifies no 409 on re-register after proof."""
+def test_edit_lock_until_admin_verifies(client):
+    """Team edits on /registerteam are locked while the payment is
+    VERIFICATION_PENDING (proof under review) or REJECTED, and allowed while
+    PENDING (cart phase) and after SUCCESS (admin verified)."""
     fee = settings.REGISTRATION_FEE_PER_STUDENT_PAISE
     leader_id, token = _register_leader(client, "lock")
-    assert _register_team(client, token, leader_id, "Treasure Titans", count=1).status_code == 200
-    assert _submit_proof(client, token, amount=fee, content=_png_bytes()).status_code == 200
 
-    # Should succeed — no payment lock anymore
+    # Cart phase: multiple events can be registered while payment is PENDING.
+    assert _register_team(client, token, leader_id, "Treasure Titans", count=1).status_code == 200
+    assert _register_team(client, token, leader_id, "Mute Masters", count=1).status_code == 200
+
+    # Proof submitted -> VERIFICATION_PENDING -> further registration blocked.
+    assert _submit_proof(client, token, amount=2 * fee, content=_png_bytes()).status_code == 200
+    r = _register_team(client, token, leader_id, "Fixathon", count=1)
+    assert r.status_code == 409, r.text
+    assert "under review" in r.json()["message"]
+
+    # Admin verifies -> SUCCESS -> registration allowed again (no deadline set).
+    sa = _super_admin_headers(client)
+    listed = client.get("/admin/payments?status=VERIFICATION_PENDING", headers=sa).json()
+    pid = next(p for p in listed["data"] if p["leaderId"] == leader_id)["_id"]
+    assert client.post(f"/admin/payments/{pid}/verify", headers=sa).status_code == 200
+
     r = _register_team(client, token, leader_id, "Fixathon", count=1)
     assert r.status_code == 200, r.text
 

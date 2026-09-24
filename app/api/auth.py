@@ -42,6 +42,7 @@ from app.schemas.common import success
 from app.schemas.payment import MyPaymentsResponse, SubmitProofResponse
 from app.services.fees import build_upi_uri, calculate_registration_fee
 from app.services.payment_sqla import (
+    assert_team_edits_allowed,
     build_payment_summary,
     ensure_payment_for_registration,
     submit_payment_proof,
@@ -154,6 +155,9 @@ async def register_team_route(
     if deadline and datetime.now(timezone.utc) > deadline:
         raise APIError(400, "Registration deadline has passed. Contact an organizer to register.")
 
+    payment = await payments.find_by_leader(payload.leaderId)
+    assert_team_edits_allowed(payment)
+
     result = await register_team(
         session,
         event_regs,
@@ -166,10 +170,9 @@ async def register_team_route(
 
     unique_count = await event_regs.count_distinct_students(payload.leaderId)
     amount_due = calculate_registration_fee(unique_count)
-    await ensure_payment_for_registration(
+    payment = await ensure_payment_for_registration(
         session, payments, payload.leaderId, amount_due, unique_count
     )
-    payment = await payments.find_by_leader(payload.leaderId)
 
     return success(
         f"Team of {len(payload.participants)} registered for {payload.event}.",

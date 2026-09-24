@@ -68,10 +68,10 @@ Leader submits proof (UTR + screenshot) -> VERIFICATION_PENDING
 Admin verifies -> SUCCESS -> all registrations = CONFIRMED
 ```
 
-### Current Edit Lock (THE PROBLEM)
+### Historical Edit Lock (THE PROBLEM — fixed by narrowing, not removal)
 
 ```python
-# constants.py
+# constants.py (old, buggy — locked SUCCESS forever)
 PAYMENT_LOCKED_STATUSES = ("VERIFICATION_PENDING", "SUCCESS")
 
 # payment_sqla.py
@@ -83,6 +83,11 @@ def assert_team_edits_allowed(payment):
 
 Called in `auth.py:1086` before every `/registerteam`. Once proof is submitted,
 leader can NEVER add more students -- even after admin verification.
+
+**Current behavior (D1 amendment):** `PAYMENT_LOCKED_STATUSES` is now
+`["VERIFICATION_PENDING", "REJECTED"]` — locked only while the admin has not
+verified; `PENDING` (cart phase) and `SUCCESS` (verified) are unlocked, subject
+to the registration deadline.
 
 ---
 
@@ -104,7 +109,7 @@ These are LOCKED decisions from user conversations. Do not reopen.
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | **Remove payment-based edit lock entirely** | Replace with deadline-based lock. Payment lock was too aggressive. |
+| D1 | ~~**Remove payment-based edit lock entirely**~~ **Superseded (2026-09): partial lock restored** — `assert_team_edits_allowed` locks `/registerteam` on `VERIFICATION_PENDING` + `REJECTED` only; `PENDING` (cart) and `SUCCESS` (verified) stay unlocked. | Original lock was too aggressive because it also locked `SUCCESS` forever; the narrowed set keeps the cart flow (D10) and post-verification expansion (D6) while blocking edits during admin review. |
 | D2 | **Add admin-set registration deadline** | Admin controls cutoff for food ordering logistics. |
 | D3 | **Deadline blocks `/regleader` and `/registerteam` only** | Payment proof submission still allowed after deadline (for already-registered students). Admin actions always allowed. |
 | D4 | **Deadline is global** (not per-shift, not per-event) | Single cutoff for all leaders. Admin sets via API. |

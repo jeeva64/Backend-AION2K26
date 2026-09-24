@@ -197,9 +197,11 @@ If a token is valid but for the wrong audience the API returns `403`. Example me
   `amountDuePaises`, `currency`, `upiUri`, `paymentStatus`. New rows are
   created as `PAYMENT_PENDING`; when `paymentStatus` is `"PENDING"` show the
   payment dialog next (amount + UPI QR + proof upload).
-- **Edit lock:** team registration returns `409` once payment proof is under
-  review (`VERIFICATION_PENDING`) or verified (`SUCCESS`). Surface that message
-  instead of letting students retry blindly.
+- **Edit lock:** team registration returns `409` while the payment is
+  `VERIFICATION_PENDING` (proof under review) or `REJECTED`. It stays allowed
+  while `PENDING` (cart phase, proof not yet submitted) and after `SUCCESS`
+  (admin verified) — subject to the registration deadline. Surface the
+  `message` instead of letting students retry blindly.
 
 ### `GET /payments/mine` (Leader)
 

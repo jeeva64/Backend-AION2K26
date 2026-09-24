@@ -1,9 +1,13 @@
 # AGENTS.md
 
 Notes for OpenCode sessions working in this repo. Read `readme.md`, `db.md`,
-`integrations.md`, and `MIGRATION.md` first for routes, schemas, the
-client-facing response envelope, and the MongoDB→PostgreSQL migration — this
-file only captures what those don't say.
+`integrations.md`, `RULES.md`, and `MIGRATION.md` first for routes, schemas,
+the client-facing response envelope, participant-facing rules, and the
+MongoDB→PostgreSQL migration — this file only captures what those don't say.
+`RULES.md` is the published rulebook (harmonized symposium circular + website
+rules, event date 07/10/2026): documentation only — it never changes behavior;
+when editing it, re-check `EVENT_MAX_TEAM_SIZE`, `EVENT_SLOT_MAP`,
+`MAX_STUDENTS_PER_LEADER`, and the ₹200 fee in code.
 
 Docs are synced with code: `readme.md` + `integrations.md` document all **29**
 endpoints (including `/admin/changepassword`,

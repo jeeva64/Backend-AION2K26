@@ -48,6 +48,12 @@ REGISTRATION_STATUSES = [
 
 PAYMENT_STATUSES = ["PENDING", "VERIFICATION_PENDING", "SUCCESS", "REJECTED"]
 
+# Payment statuses that lock team edits on /registerteam. PENDING (cart phase,
+# proof not yet submitted) and SUCCESS (admin verified) are intentionally NOT
+# locked: leaders may build a multi-event cart before paying, and may add
+# students/events after verification (supplementary payment flow).
+PAYMENT_LOCKED_STATUSES = ["VERIFICATION_PENDING", "REJECTED"]
+
 PAYMENT_AUDIT_ACTIONS = [
     "CREATED",
     "PROOF_SUBMITTED",

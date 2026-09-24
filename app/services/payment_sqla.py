@@ -28,9 +28,33 @@ from app.repositories_sqla import (
 )
 from app.services.fees import calculate_registration_fee, normalize_utr
 from app.storage.proof_storage import ProofStorageError, get_proof_storage
-from app.utils.constants import ALLOWED_PROOF_FORMATS
+from app.utils.constants import ALLOWED_PROOF_FORMATS, PAYMENT_LOCKED_STATUSES
 
 _UTR_RE = re.compile(r"^[A-Za-z0-9]{8,22}$")
+
+
+def assert_team_edits_allowed(payment: dict | None) -> None:
+    """409 when team edits are locked (proof under review or rejected).
+
+    PENDING (cart phase) and SUCCESS (admin verified) are allowed so leaders
+    can build a multi-event cart before paying and expand after verification.
+    """
+    if payment is None:
+        return
+    status = payment["paymentStatus"]
+    if status in PAYMENT_LOCKED_STATUSES:
+        if status == "REJECTED":
+            raise APIError(
+                409,
+                "Your payment was rejected. Submit a new payment proof before "
+                "registering more students.",
+            )
+        raise APIError(
+            409,
+            "Team changes are locked while your payment is under review. You "
+            "can register more students after the organizer verifies your "
+            "payment.",
+        )
 
 
 async def ensure_payment_for_registration(

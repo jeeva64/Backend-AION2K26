@@ -7,6 +7,10 @@ persists to **PostgreSQL** via SQLAlchemy 2.0 + asyncpg, with the schema owned b
 **Alembic**. The legacy MongoDB code is kept dormant for the migration window — see
 `MIGRATION.md` for the full migration guide and rollback strategy.
 
+Participant-facing rules (fee, payment workflow, caps, per-event team sizes,
+on-the-day instructions) live in **`RULES.md`** — keep it in sync with
+`app/utils/constants.py` and `app/services/fees.py`.
+
 ## Tech Stack
 
 - Python 3.11
@@ -407,6 +411,7 @@ Rules enforced (`409` on violation):
 - **Per-event team size limits**: Fixathon(2), Mute Masters(2), Treasure Titans(2), Bid Mayhem(2), QRush(2), VisionX(1), ThinkSync(2), Crazy Sell(4). Exceeding the limit returns `400`.
 - **Bid Mayhem** occupies both slots — a student in Bid Mayhem cannot join other events, and Bid Mayhem cannot be combined with any other event.
 - Each student max **2 events**, no same-slot clash.
+- **Payment edit lock**: registration is locked (`409`) while the leader's payment is `VERIFICATION_PENDING` (proof under review) or `REJECTED`. It is allowed while `PENDING` (before proof submission) and after `SUCCESS` (admin verified).
 - **Registration deadline**: if the admin has set a deadline, `/registerteam` returns `400` after the deadline passes. Payment submission (`/payments/proof`) is still allowed after the deadline.
 
 Success `200`:
@@ -816,6 +821,9 @@ Liveness check. Public.
 | Crazy Sell     | 2    |
 
 An event not in this map is rejected with `400` on `/registerteam`.
+
+> Participant-facing rules for these events (team sizes, slots, exclusivity)
+> are published in `RULES.md`.
 
 ---
 
